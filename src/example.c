@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 #define NTFS_PARSER_IMPLEMENTATION
 #include "ntfs_parser.h"
@@ -46,7 +47,15 @@ int main(void)
         return 1;
     }
 
+    void    *RecordBuffer = Win32_AllocateMemory_(NtfsVolume.BytesPerMftEntry);
+    uint64_t EntryIndex   = 10;
+    if (!NTFS_MftReadRecord(&NtfsVolume, EntryIndex, RecordBuffer)) {
+        fprintf(stderr, "Failed to read mft entry (%lld)\n", EntryIndex);
+        return 1;
+    }
+
     NTFS_VolumeClose(&NtfsVolume);
 
+    system("pause");
     return 0;
 }
