@@ -142,6 +142,16 @@ typedef enum {
     AttributeType_SentinalEnd = -1,  // 0xFFFFFFFF
 } ntfs_attr_type;
 
+inline char *NTFS_AttributeType(ntfs_attr_type Type)
+{
+    char *Result = 0;
+    switch (Type) {
+        case AttributeType_Data: Result = "AttributeType_Data";    break;
+        default:                 Result = "AttributeType_Unknown"; break;
+    }
+
+    return Result;
+}
 
 typedef struct {
     union {
@@ -159,6 +169,10 @@ typedef struct {
     // Internal
     void *_Pointer;
 } ntfs_data_run;
+
+typedef struct {
+    ntfs_attr_header *Attribute;
+} ntfs_attr_iter;
 
 #endif  // _NTFS_PARSER_H
 
@@ -218,6 +232,25 @@ static void *Win32_AllocateMemory_(size_t Size)
 static void Win32_FreeMemory_(void *Address)
 {
     HeapFree(GetProcessHeap(), 0, Address);
+}
+
+
+bool NTFS_NextFileAttribute(ntfs_file_record *FileRecord, ntfs_attr_iter *Iter)
+{
+    if (Iter->Attribute == 0) {
+        Iter->Attribute =
+            NTFS_AdjustPointer_(FileRecord, FileRecord->AttributesOffset);
+    } else {
+        Iter->Attribute =
+            NTFS_AdjustPointer_(Iter->Attribute, Iter->Attribute->Length);
+    }
+
+    if (Iter->Attribute->Type == AttributeType_SentinalEnd) {
+        Iter->Attribute = 0;
+        return false;
+    }
+
+    return true;
 }
 
 
