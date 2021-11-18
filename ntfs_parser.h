@@ -319,7 +319,7 @@ void NTFS_VolumeClose(ntfs_volume *Volume)
 }
 
 
-static bool NTFS_NextDataRun_(ntfs_attr_header *NonResAttr, ntfs_data_run *DataRun)
+bool NTFS_NextDataRun(ntfs_attr_header *NonResAttr, ntfs_data_run *DataRun)
 {
     NTFS_Assert(NonResAttr->IsNonResident, "Resident attribute is invalid here");
 
@@ -375,7 +375,7 @@ bool NTFS_MftReadRecord(ntfs_volume *Volume, uint64_t Index, void *Buffer)
     ntfs_data_run     DataRun  = { 0 };
 
     uint64_t PhysicalCluster = 0;
-    while (NTFS_NextDataRun_(DataAttr, &DataRun) == true) {
+    while (NTFS_NextDataRun(DataAttr, &DataRun) == true) {
         PhysicalCluster += DataRun.Offset;
 
         if (VirtualCluster < DataRun.Length) {

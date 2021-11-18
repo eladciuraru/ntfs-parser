@@ -72,6 +72,7 @@ void PrintHexDump(void *Buffer, size_t Size)
             printf(" %s\n", AsciiBuffer);
         }
     }
+    printf("%08llx:\n", Size);
 }
 
 
@@ -89,7 +90,7 @@ int main(void)
     }
 
     void    *RecordBuffer = Win32_AllocateMemory_(NtfsVolume.BytesPerMftEntry);
-    uint64_t EntryIndex   = 10;
+    uint64_t EntryIndex   = 0;
     if (!NTFS_MftReadRecord(&NtfsVolume, EntryIndex, RecordBuffer)) {
         fprintf(stderr, "Failed to read mft entry (%lld)\n", EntryIndex);
         return 1;
@@ -114,19 +115,28 @@ int main(void)
         printf("\n");
         if (Header->IsNonResident) {
             printf("Non Resident:\n");
-            printf("\tFirstCluster: %08llx\n", Header->_NonResident.FirstCluster);
-            printf("\tLastCluster: %08llx\n", Header->_NonResident.LastCluster);
-            printf("\tDataRunOffset: %04x\n", Header->_NonResident.DataRunOffset);
-            printf("\tCompressionUnit: %04x\n", Header->_NonResident.CompressionUnit);
-            printf("\tAttributeAllocated: %08llx\n", Header->_NonResident.AttributeAllocated);
-            printf("\tAttributeSize: %08llx\n", Header->_NonResident.AttributeSize);
-            printf("\tStreamDataSize: %08llx\n", Header->_NonResident.StreamDataSize);
+            printf("    FirstCluster: %08llx\n", Header->_NonResident.FirstCluster);
+            printf("    LastCluster: %08llx\n", Header->_NonResident.LastCluster);
+            printf("    DataRunOffset: %04x\n", Header->_NonResident.DataRunOffset);
+            printf("    CompressionUnit: %04x\n", Header->_NonResident.CompressionUnit);
+            printf("    AttributeAllocated: %08llx\n", Header->_NonResident.AttributeAllocated);
+            printf("    AttributeSize: %08llx\n", Header->_NonResident.AttributeSize);
+            printf("    StreamDataSize: %08llx\n", Header->_NonResident.StreamDataSize);
+
+            printf("\nData Runs:\n");
+            printf("    Length Bytes    Offset Bytes    Length      Offset\n");
+            ntfs_data_run DataRun = { 0 };
+            while (NTFS_NextDataRun(Header, &DataRun)) {
+                printf("    %02x              %02x              %08llx    %08llx\n",
+                       DataRun.LengthBytes, DataRun.OffsetBytes,
+                       DataRun.Length, DataRun.Offset);
+            }
 
         } else {
             printf("Resident:\n");
-            printf("\tAttributeLength: %08x\n", Header->_Resdient.AttributeLength);
-            printf("\tAttributeOffset: %04x\n", Header->_Resdient.AttributeOffset);
-            printf("\tIsIndexed: %02x\n", Header->_Resdient.IsIndexed);
+            printf("    AttributeLength: %08x\n", Header->_Resdient.AttributeLength);
+            printf("    AttributeOffset: %04x\n", Header->_Resdient.AttributeOffset);
+            printf("    IsIndexed: %02x\n", Header->_Resdient.IsIndexed);
         }
 
         printf("\nHex Dump:\n");
