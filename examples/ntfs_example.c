@@ -7,7 +7,8 @@
 
 int main(void)
 {
-    ntfs_volume Volume = NTFS_VolumeOpen('C');
+    // ntfs_volume Volume = NTFS_VolumeOpen('C');
+    ntfs_volume Volume = NTFS_VolumeOpenFromFile(L"ntfs_volume.vhd");
     if (Volume.Error) {
         printf("error: %s\n", NTFS_ErrorToString(Volume.Error));
         return 1;

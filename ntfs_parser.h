@@ -18,7 +18,6 @@
 #define NTFS_WSTRINGIFY_(s) L ## s
 #define NTFS_WSTRINGIFY(s)  NTFS_WSTRINGIFY_(s)
 
-
 #ifndef NTFS_ASSERT
     #define NTFS_ASSERT(cond, msg)                                      \
         NTFS_STATEMENT(                                                 \
@@ -41,15 +40,17 @@ typedef enum {
     NTFSError_VolumeOpen,
     NTFSError_VolumeReadBootRecord,
     NTFSError_VolumeUnknownSignature,
+    NTFSError_VolumePartitionNotFound,
 } ntfs_error;
 
 static inline char *NTFS_ErrorToString(ntfs_error Error)
 {
     switch (Error) {
-    case NTFSError_Success:                return "ntfs success";
-    case NTFSError_VolumeOpen:             return "ntfs failed opening handle to volume";
-    case NTFSError_VolumeReadBootRecord:   return "ntfs failed reading volume boot record";
-    case NTFSError_VolumeUnknownSignature: return "ntfs failed unknown volume signature";
+    case NTFSError_Success:                 return "ntfs success";
+    case NTFSError_VolumeOpen:              return "ntfs failed opening handle to volume";
+    case NTFSError_VolumeReadBootRecord:    return "ntfs failed reading volume boot record";
+    case NTFSError_VolumeUnknownSignature:  return "ntfs failed unknown volume signature";
+    case NTFSError_VolumePartitionNotFound: return "ntfs failed partition was not found";
     }
 
     return "";
@@ -60,6 +61,7 @@ typedef struct {
     ntfs_error Error;
     void      *Handle;
 
+    uint64_t StartOffset;
     uint64_t SectorsPerCluster;
     uint64_t MftCluster;
     uint64_t BytesPerSector;
@@ -67,11 +69,18 @@ typedef struct {
     uint64_t BytesPerMftEntry;
 } ntfs_volume;
 
-#define NTFS_BOOT_RECORD_SIZE       512
-#define NTFS_BOOT_RECORD_SIGNATURE  0xAA55
+#define NTFS_BOOT_RECORD_SIZE                512
+#define NTFS_BOOT_RECORD_SIGNATURE           0xAA55
+#define NTFS_BOOT_RECORD_PARTITION_OFFSET    0x01BE
+#define NTFS_BOOT_RECORD_PARITION_ENTRY_SIZE 0x10
 
 NTFS_API ntfs_volume NTFS_VolumeOpen(char DriveLetter);
+NTFS_API ntfs_volume NTFS_VolumeOpenFromFile(wchar_t *Path);
 NTFS_API void        NTFS_VolumeClose(ntfs_volume *Volume);
+NTFS_API bool        NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From,
+                                     void *Buffer, size_t Size);
+
+NTFS_API ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset);
 
 #endif   // NTFS_PARSER_H
 
@@ -132,6 +141,7 @@ static bool NTFS__Win32FileRead(void *Handle, uint64_t Offset, void *Buffer, siz
     return Result && BytesRead == Size;
 }
 
+
 ntfs_volume NTFS_VolumeOpen(char DriveLetter)
 {
     ntfs_volume Result = { 0 };
@@ -142,10 +152,69 @@ ntfs_volume NTFS_VolumeOpen(char DriveLetter)
     if (VolumeHandle == 0) {
         NTFS_RETURN(&Result, NTFSError_VolumeOpen);
     }
-    Result.Handle = VolumeHandle;
+
+    Result = NTFS__VolumeLoad(VolumeHandle, 0);
+
+skip:
+    return Result;
+}
+
+ntfs_volume NTFS_VolumeOpenFromFile(wchar_t *Path)
+{
+    ntfs_volume Result = { 0 };
+
+    void *VolumeHandle = NTFS__Win32FileOpen(Path);
+    if (VolumeHandle == 0) {
+        NTFS_RETURN(&Result, NTFSError_VolumeOpen);
+    }
 
     uint8_t BootSector[NTFS_BOOT_RECORD_SIZE];
-    if (!NTFS__Win32FileRead(Result.Handle, 0, &BootSector, sizeof(BootSector))) {
+    if (!NTFS__Win32FileRead(VolumeHandle, 0, &BootSector, sizeof(BootSector))) {
+        NTFS_RETURN(&Result, NTFSError_VolumeReadBootRecord);
+    }
+
+    uint16_t Signature = *NTFS_CAST(uint16_t *, &BootSector[510]);
+    if (Signature != NTFS_BOOT_RECORD_SIGNATURE) {
+        NTFS_RETURN(&Result, NTFSError_VolumeUnknownSignature);
+    }
+
+    uint8_t *PartitionTable = &BootSector[NTFS_BOOT_RECORD_PARTITION_OFFSET];
+    Result.Error            = NTFSError_VolumePartitionNotFound;
+    for (int i = 0; i < 4; i++) {
+        uint8_t PartitionType = PartitionTable[0x04];
+        if (PartitionType != 0) {
+            uint32_t FirstSector = *NTFS_CAST(uint32_t *, &PartitionTable[0x08]);
+            Result = NTFS__VolumeLoad(VolumeHandle, FirstSector * sizeof(BootSector));
+            break;
+        }
+
+        PartitionTable += NTFS_BOOT_RECORD_PARITION_ENTRY_SIZE;
+    }
+
+skip:
+    return Result;
+}
+
+void NTFS_VolumeClose(ntfs_volume *Volume)
+{
+    if (Volume->Handle) {
+        CloseHandle(Volume->Handle);
+    }
+
+    // Dont override the error
+    *Volume = (ntfs_volume) { .Error = Volume->Error};
+}
+
+ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
+{
+    ntfs_volume Result = {
+        .Handle         = VolumeHandle,
+        .StartOffset    = VbrOffset,
+        .BytesPerSector = NTFS_BOOT_RECORD_SIZE,
+    };
+
+    uint8_t BootSector[NTFS_BOOT_RECORD_SIZE];
+    if (!NTFS_VolumeRead(&Result, 0, &BootSector, sizeof(BootSector))) {
         NTFS_RETURN(&Result, NTFSError_VolumeReadBootRecord);
     };
 
@@ -171,14 +240,11 @@ skip:
     return Result;
 }
 
-void NTFS_VolumeClose(ntfs_volume *Volume)
+bool NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From, void *Buffer, size_t Size)
 {
-    if (Volume->Handle) {
-        CloseHandle(Volume->Handle);
-    }
-
-    // Dont override the error
-    *Volume = (ntfs_volume) { .Error = Volume->Error};
+    bool Result = NTFS__Win32FileRead(Volume->Handle, From + Volume->StartOffset,
+                                       Buffer, Size);
+    return Result;
 }
 
 #endif  // NTFS_PARSER_IMPLEMENTATION
