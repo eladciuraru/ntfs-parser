@@ -90,12 +90,19 @@ NTFS_API ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset);
 #ifdef NTFS_PARSER_IMPLEMENTATION
 
 // Helper functions
-static inline bool NTFS_IsPowerOf2(uint64_t Value)
+static inline bool NTFS__IsPowerOf2(uint64_t Value)
 {
     bool Result = (Value != 0) && (Value & (Value - 1)) == 0;
     return Result;
 }
 
+static inline bool NTFS__IsPageAligned(size_t Value)
+{
+    const size_t PageSize = 4096;
+
+    bool Result = (Value & (PageSize - 1)) == 0;
+    return Result;
+}
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -104,6 +111,9 @@ static inline bool NTFS_IsPowerOf2(uint64_t Value)
 static void  NTFS__Win32Log(wchar_t *Message, wchar_t *FileName, size_t Line);
 static void *NTFS__Win32FileOpen(wchar_t *FilePath);
 static bool  NTFS__Win32FileRead(void *Handle, uint64_t Offset, void *Buffer, size_t Size);
+static void *NTFS__Win32MemoryAllocate(size_t Size, size_t CommittedSize);
+static void *NTFS__Win32MemoryCommit(void *Address, size_t Size);
+static bool  NTFS__Win32MemoryFree(void *Address);
 
 static void NTFS__Win32Log(wchar_t *Message, wchar_t *FileName, size_t Line)
 {
@@ -149,6 +159,33 @@ static bool NTFS__Win32FileRead(void *Handle, uint64_t Offset, void *Buffer, siz
     BOOL  Result    =
         ReadFile(Handle, Buffer, NTFS_CAST(DWORD, Size), &BytesRead, &Overlapped);
     return Result && BytesRead == Size;
+}
+
+static void *NTFS__Win32MemoryAllocate(size_t Size, size_t CommittedSize)
+{
+    NTFS_ASSERT(CommittedSize <= Size, "Committed size cannot be larger from total allocation size");
+    NTFS_ASSERT(NTFS__IsPageAligned(Size), "Reserved size needs to be page aligned");
+
+    void *Result = VirtualAlloc(0, Size, MEM_RESERVE, PAGE_READWRITE);
+    if (Result) {
+        Result = NTFS__Win32MemoryCommit(Result, CommittedSize);
+    }
+
+    return Result;
+}
+
+static void *NTFS__Win32MemoryCommit(void *Address, size_t Size)
+{
+    NTFS_ASSERT(NTFS__IsPageAligned(Size), "Committed size needs to be page aligned");
+
+    void *Result = VirtualAlloc(Address, Size, MEM_COMMIT, PAGE_READWRITE);
+    return Result;
+}
+
+static bool NTFS__Win32MemoryFree(void *Address)
+{
+    bool Result = VirtualFree(Address, 0, MEM_FREE) != 0;
+    return Result;
 }
 
 
@@ -245,8 +282,8 @@ ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
         Result.BytesPerMftEntry = ClustersPerFileRecord * Result.BytesPerCluster;
     }
 
-    bool IsValid = NTFS_IsPowerOf2(Result.BytesPerSector);
-    IsValid     &= NTFS_IsPowerOf2(Result.SectorsPerCluster);
+    bool IsValid = NTFS__IsPowerOf2(Result.BytesPerSector);
+    IsValid     &= NTFS__IsPowerOf2(Result.SectorsPerCluster);
     IsValid     &= Result.BytesPerMftEntry <= Result.BytesPerCluster;
     if (!IsValid) {
         NTFS_RETURN(&Result, NTFSError_VolumeFailedValidation);
