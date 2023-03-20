@@ -41,6 +41,7 @@ typedef enum {
     NTFSError_VolumeReadBootRecord,
     NTFSError_VolumeUnknownSignature,
     NTFSError_VolumePartitionNotFound,
+    NTFSError_VolumeFailedValidation,
 } ntfs_error;
 
 static inline char *NTFS_ErrorToString(ntfs_error Error)
@@ -51,6 +52,7 @@ static inline char *NTFS_ErrorToString(ntfs_error Error)
     case NTFSError_VolumeReadBootRecord:    return "ntfs failed reading volume boot record";
     case NTFSError_VolumeUnknownSignature:  return "ntfs failed unknown volume signature";
     case NTFSError_VolumePartitionNotFound: return "ntfs failed partition was not found";
+    case NTFSError_VolumeFailedValidation:  return "ntfs failed volume fields validation";
     }
 
     return "";
@@ -86,6 +88,14 @@ NTFS_API ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset);
 
 
 #ifdef NTFS_PARSER_IMPLEMENTATION
+
+// Helper functions
+static inline bool NTFS_IsPowerOf2(uint64_t Value)
+{
+    bool Result = (Value != 0) && (Value & (Value - 1)) == 0;
+    return Result;
+}
+
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -223,7 +233,6 @@ ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
         NTFS_RETURN(&Result, NTFSError_VolumeUnknownSignature);
     }
 
-    // TODO: Validate valid values
     Result.BytesPerSector    = *NTFS_CAST(uint16_t *, &BootSector[0x0B]);
     Result.SectorsPerCluster = *NTFS_CAST(uint8_t  *, &BootSector[0x0D]);
     Result.MftCluster        = *NTFS_CAST(uint64_t *, &BootSector[0x30]);
@@ -236,14 +245,26 @@ ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
         Result.BytesPerMftEntry = ClustersPerFileRecord * Result.BytesPerCluster;
     }
 
+    bool IsValid = NTFS_IsPowerOf2(Result.BytesPerSector);
+    IsValid     &= NTFS_IsPowerOf2(Result.SectorsPerCluster);
+    IsValid     &= Result.BytesPerMftEntry <= Result.BytesPerCluster;
+    if (!IsValid) {
+        NTFS_RETURN(&Result, NTFSError_VolumeFailedValidation);
+    }
+
 skip:
     return Result;
 }
 
 bool NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From, void *Buffer, size_t Size)
 {
+    NTFS_ASSERT((From & (Volume->BytesPerSector - 1)) == 0,
+                "volume read offset is not aligned to volume sector size");
+    NTFS_ASSERT((Size & (Volume->BytesPerSector - 1)) == 0,
+                "volume read size is not aligned to volume sector size");
+
     bool Result = NTFS__Win32FileRead(Volume->Handle, From + Volume->StartOffset,
-                                       Buffer, Size);
+                                      Buffer, Size);
     return Result;
 }
 
