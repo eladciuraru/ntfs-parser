@@ -60,6 +60,22 @@ NTFS_API void      *NTFS__ArenaAlloc(ntfs_arena *Arena, size_t Size);
 NTFS_API void      *NTFS__ArenaResizeAlloc(ntfs_arena *Arena, void *Address, size_t Size);
 NTFS_API void       NTFS__ArenaReset(ntfs_arena *Arena);
 
+// Dynamic list API
+typedef struct {
+    size_t Capacity;
+    size_t Length;
+} ntfs_list_header;
+
+#define NTFS__LIST_DEFAULT_SIZE  64
+#define NTFS__ListHeader(list)   (&NTFS_CAST(ntfs_list_header *, (list))[-1])
+#define NTFS__ListLen(list)      ((list) ? (NTFS__ListHeader(list)->Length) : 0)
+#define NTFS__ListCap(list)      ((list) ? (NTFS__ListHeader(list)->Capacity) : 0)
+#define NTFS__ListPush(arena, list, item) \
+    ((list) = NTFS__ListGrow(arena, list, sizeof(item)), \
+     (list)[NTFS__ListHeader(list)->Length++] = (item))
+
+NTFS_API void *NTFS__ListGrow(ntfs_arena *Arena, void *List, size_t ItemSize);
+
 
 typedef enum {
     NTFS_Error_Success,
@@ -296,6 +312,24 @@ void *NTFS__ArenaResizeAlloc(ntfs_arena *Arena, void *Address, size_t Size)
 void NTFS__ArenaReset(ntfs_arena *Arena)
 {
     Arena->Offset = 0;
+}
+
+void *NTFS__ListGrow(ntfs_arena *Arena, void *List, size_t ItemSize)
+{
+    ntfs_list_header *Result = NTFS__ListHeader(List);
+    if (List == 0) {
+        size_t Size      = sizeof(*Result) + NTFS__LIST_DEFAULT_SIZE * ItemSize;
+        Result           = NTFS__ArenaAlloc(Arena, Size);
+        Result->Capacity = NTFS__LIST_DEFAULT_SIZE;
+        Result->Length   = 0;
+
+    } else if (Result->Length == Result->Capacity) {
+        Result->Capacity *= 2;
+        size_t NewSize    = sizeof(*Result) + Result->Capacity * ItemSize;
+        Result = NTFS__ArenaResizeAlloc(Arena, Result, NewSize);
+    }
+
+    return NTFS_CAST(uint8_t *, Result) + sizeof(*Result);
 }
 
 
