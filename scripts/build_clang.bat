@@ -6,8 +6,8 @@ if "%ProjectDir%" == "" set "ProjectDir=%~dp0..\"
 set "BinDir=%ProjectDir%bin\"
 set "SourceDir=%ProjectDir%examples\"
 
-set "Warnings=-Werror"
-set "CompilerFlags=-m64 %Warnings% -std=c11 -pedantic -I^"%ProjectDir%\^""
+set "Warnings=-Werror -Wall -pedantic-errors "
+set "CompilerFlags=-m64 %Warnings% -std=c11 -I^"%ProjectDir%\^""
 set "LinkerFlags=-fuse-ld=lld -Wl,-subsystem:console"
 
 if not exist "%BinDir%" mkdir "%BinDir%"
