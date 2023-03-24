@@ -34,25 +34,25 @@
 #endif
 
 typedef enum {
-    NTFSError_Success,
+    NTFS_Error_Success,
 
     // Volume related errors
-    NTFSError_VolumeOpen,
-    NTFSError_VolumeReadBootRecord,
-    NTFSError_VolumeUnknownSignature,
-    NTFSError_VolumePartitionNotFound,
-    NTFSError_VolumeFailedValidation,
+    NTFS_Error_VolumeOpen,
+    NTFS_Error_VolumeReadBootRecord,
+    NTFS_Error_VolumeUnknownSignature,
+    NTFS_Error_VolumePartitionNotFound,
+    NTFS_Error_VolumeFailedValidation,
 } ntfs_error;
 
 static inline char *NTFS_ErrorToString(ntfs_error Error)
 {
     switch (Error) {
-    case NTFSError_Success:                 return "ntfs success";
-    case NTFSError_VolumeOpen:              return "ntfs failed opening handle to volume";
-    case NTFSError_VolumeReadBootRecord:    return "ntfs failed reading volume boot record";
-    case NTFSError_VolumeUnknownSignature:  return "ntfs failed unknown volume signature";
-    case NTFSError_VolumePartitionNotFound: return "ntfs failed partition was not found";
-    case NTFSError_VolumeFailedValidation:  return "ntfs failed volume fields validation";
+    case NTFS_Error_Success:                 return "ntfs success";
+    case NTFS_Error_VolumeOpen:              return "ntfs failed opening handle to volume";
+    case NTFS_Error_VolumeReadBootRecord:    return "ntfs failed reading volume boot record";
+    case NTFS_Error_VolumeUnknownSignature:  return "ntfs failed unknown volume signature";
+    case NTFS_Error_VolumePartitionNotFound: return "ntfs failed partition was not found";
+    case NTFS_Error_VolumeFailedValidation:  return "ntfs failed volume fields validation";
     }
 
     return "";
@@ -197,7 +197,7 @@ ntfs_volume NTFS_VolumeOpen(char DriveLetter)
     DrivePath[4]        = NTFS_CAST(wchar_t, DriveLetter);
     void *VolumeHandle  = NTFS__Win32FileOpen(DrivePath);
     if (VolumeHandle == 0) {
-        NTFS_RETURN(&Result, NTFSError_VolumeOpen);
+        NTFS_RETURN(&Result, NTFS_Error_VolumeOpen);
     }
 
     Result = NTFS__VolumeLoad(VolumeHandle, 0);
@@ -212,21 +212,21 @@ ntfs_volume NTFS_VolumeOpenFromFile(wchar_t *Path)
 
     void *VolumeHandle = NTFS__Win32FileOpen(Path);
     if (VolumeHandle == 0) {
-        NTFS_RETURN(&Result, NTFSError_VolumeOpen);
+        NTFS_RETURN(&Result, NTFS_Error_VolumeOpen);
     }
 
     uint8_t BootSector[NTFS_BOOT_RECORD_SIZE];
     if (!NTFS__Win32FileRead(VolumeHandle, 0, &BootSector, sizeof(BootSector))) {
-        NTFS_RETURN(&Result, NTFSError_VolumeReadBootRecord);
+        NTFS_RETURN(&Result, NTFS_Error_VolumeReadBootRecord);
     }
 
     uint16_t Signature = *NTFS_CAST(uint16_t *, &BootSector[510]);
     if (Signature != NTFS_BOOT_RECORD_SIGNATURE) {
-        NTFS_RETURN(&Result, NTFSError_VolumeUnknownSignature);
+        NTFS_RETURN(&Result, NTFS_Error_VolumeUnknownSignature);
     }
 
     uint8_t *PartitionTable = &BootSector[NTFS_BOOT_RECORD_PARTITION_OFFSET];
-    Result.Error            = NTFSError_VolumePartitionNotFound;
+    Result.Error            = NTFS_Error_VolumePartitionNotFound;
     for (int i = 0; i < 4; i++) {
         uint8_t PartitionType = PartitionTable[0x04];
         if (PartitionType != 0) {
@@ -262,12 +262,12 @@ ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
 
     uint8_t BootSector[NTFS_BOOT_RECORD_SIZE];
     if (!NTFS_VolumeRead(&Result, 0, &BootSector, sizeof(BootSector))) {
-        NTFS_RETURN(&Result, NTFSError_VolumeReadBootRecord);
+        NTFS_RETURN(&Result, NTFS_Error_VolumeReadBootRecord);
     };
 
     uint16_t Signature = *NTFS_CAST(uint16_t *, &BootSector[510]);
     if (Signature != NTFS_BOOT_RECORD_SIGNATURE) {
-        NTFS_RETURN(&Result, NTFSError_VolumeUnknownSignature);
+        NTFS_RETURN(&Result, NTFS_Error_VolumeUnknownSignature);
     }
 
     Result.BytesPerSector    = *NTFS_CAST(uint16_t *, &BootSector[0x0B]);
@@ -286,7 +286,7 @@ ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
     IsValid     &= NTFS__IsPowerOf2(Result.SectorsPerCluster);
     IsValid     &= Result.BytesPerMftEntry <= Result.BytesPerCluster;
     if (!IsValid) {
-        NTFS_RETURN(&Result, NTFSError_VolumeFailedValidation);
+        NTFS_RETURN(&Result, NTFS_Error_VolumeFailedValidation);
     }
 
 skip:
