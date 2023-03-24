@@ -18,6 +18,11 @@
 #define NTFS_WSTRINGIFY_(s) L ## s
 #define NTFS_WSTRINGIFY(s)  NTFS_WSTRINGIFY_(s)
 
+#ifndef NTFS_MEM_COPY
+    #define NTFS_MEM_COPY(dest, dest_size, src, src_size) \
+        memcpy_s(dest, dest_size, src, src_size)
+#endif
+
 #ifndef NTFS_ASSERT
     #define NTFS_ASSERT(cond, msg)                                      \
         NTFS_STATEMENT(                                                 \
@@ -32,6 +37,29 @@
 #ifndef NTFS_API
     #define NTFS_API
 #endif
+
+// Arena APIs
+typedef struct {
+    void  *Buffer;
+    size_t ReservedSize;
+    size_t CommittedSize;
+    size_t Offset;
+} ntfs_arena;
+
+typedef struct {
+    size_t Size;
+} ntfs_arena_header;
+
+#define NTFS__ARENA_MEGABYTE(value) (value * 1024 * 1024)
+#define NTFS__ARENA_DEFAULT_COMMIT   NTFS__ARENA_MEGABYTE(1)
+#define NTFS__ARENA_DEFAULT_RESERVED NTFS__ARENA_MEGABYTE(16)
+
+NTFS_API ntfs_arena NTFS__ArenaDefault(void);
+NTFS_API void       NTFS__ArenaDestroy(ntfs_arena *Arena);
+NTFS_API void      *NTFS__ArenaAlloc(ntfs_arena *Arena, size_t Size);
+NTFS_API void      *NTFS__ArenaResizeAlloc(ntfs_arena *Arena, void *Address, size_t Size);
+NTFS_API void       NTFS__ArenaReset(ntfs_arena *Arena);
+
 
 typedef enum {
     NTFS_Error_Success,
@@ -101,6 +129,16 @@ static inline bool NTFS__IsPageAligned(size_t Value)
     const size_t PageSize = 4096;
 
     bool Result = (Value & (PageSize - 1)) == 0;
+    return Result;
+}
+
+static inline size_t NTFS__Align(size_t Value, size_t Alignment)
+{
+    size_t Result = Value;
+    if (Result % Alignment) {
+        Result += (Alignment - (Result % Alignment));
+    }
+
     return Result;
 }
 
@@ -189,6 +227,79 @@ static bool NTFS__Win32MemoryFree(void *Address)
 }
 
 
+// Arena APIs
+ntfs_arena NTFS__ArenaDefault(void)
+{
+    ntfs_arena Result    = { 0 };
+    Result.ReservedSize  = NTFS__ARENA_DEFAULT_RESERVED;
+    Result.CommittedSize = NTFS__ARENA_DEFAULT_COMMIT;
+    Result.Buffer        =
+        NTFS__Win32MemoryAllocate(Result.ReservedSize, Result.CommittedSize);
+
+    return Result;
+}
+
+void NTFS__ArenaDestroy(ntfs_arena *Arena)
+{
+    NTFS__Win32MemoryFree(Arena->Buffer);
+    *Arena = (ntfs_arena) { 0 };
+}
+
+void *NTFS__ArenaAlloc(ntfs_arena *Arena, size_t Size)
+{
+    size_t SizeAligned = NTFS__Align(Size + sizeof(ntfs_arena_header), sizeof(void *));
+
+    // TODO: Change to support growing arena when needed instead of crashing
+    NTFS_ASSERT(Arena->Offset + SizeAligned <= Arena->ReservedSize,
+                "growing arenas are not supported");
+    while (Arena->CommittedSize < Arena->ReservedSize
+           && (Arena->Offset + SizeAligned) >= Arena->CommittedSize) {
+
+        Arena->CommittedSize *= 2;
+        if (Arena->CommittedSize > Arena->ReservedSize) {
+            Arena->CommittedSize = Arena->ReservedSize;
+        }
+
+        NTFS__Win32MemoryCommit(Arena->Buffer, Arena->CommittedSize);
+    }
+
+    uint8_t *Result = &NTFS_CAST(uint8_t *, Arena->Buffer)[Arena->Offset];
+    Arena->Offset  += SizeAligned;
+
+    NTFS_CAST(ntfs_arena_header *, Result)->Size = SizeAligned;
+    Result += sizeof(ntfs_arena_header);
+
+    return Result;
+}
+
+void *NTFS__ArenaResizeAlloc(ntfs_arena *Arena, void *Address, size_t Size)
+{
+    ntfs_arena_header *Header =
+        NTFS_CAST(ntfs_arena_header *,
+                  &NTFS_CAST(uint8_t *, Address)[-sizeof(*Header)]);
+
+    void *Result = &NTFS_CAST(uint8_t *, Arena->Buffer)[(Arena->Offset - Header->Size)];
+    if (Result == Header) {  // Provided allocation is last allocation
+        size_t SizeAligned = NTFS__Align(Size + sizeof(*Header), sizeof(void *));
+        Arena->Offset = Arena->Offset - Header->Size + SizeAligned;
+        Header->Size  = SizeAligned;
+        Result        = NTFS_CAST(uint8_t *, Result) + sizeof(*Header);
+
+    } else {
+        Result = NTFS__ArenaAlloc(Arena, Size);
+        NTFS_MEM_COPY(Result, Header->Size, Address, Size);
+    }
+
+    return Result;
+}
+
+void NTFS__ArenaReset(ntfs_arena *Arena)
+{
+    Arena->Offset = 0;
+}
+
+
+// Volume API
 ntfs_volume NTFS_VolumeOpen(char DriveLetter)
 {
     ntfs_volume Result = { 0 };
