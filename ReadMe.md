@@ -2,6 +2,13 @@
 Simple single header NTFS read-only parser library
 
 
+# Compile
+```shell
+$ shell.bat
+$ build.bat
+```
+
+
 # Resources
 * [NTFS Overview](http://ntfs.com/ntfs_basics.htm)
 * [NTFS - Wikipedia](https://en.wikipedia.org/wiki/NTFS)
