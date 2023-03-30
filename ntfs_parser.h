@@ -79,6 +79,7 @@ NTFS_API void *NTFS__ListGrow(ntfs_arena *Arena, void *List, size_t ItemSize);
 
 typedef enum {
     NTFS_Error_Success,
+    NTFS_Error_MemoryError,
 
     // Volume related errors
     NTFS_Error_VolumeOpen,
@@ -86,17 +87,24 @@ typedef enum {
     NTFS_Error_VolumeUnknownSignature,
     NTFS_Error_VolumePartitionNotFound,
     NTFS_Error_VolumeFailedValidation,
+
+    // File record related errors
+    NTFS_Error_RecordFailedRead,
+    NTFS_Error_RecordFailedValidation,
 } ntfs_error;
 
 static inline char *NTFS_ErrorToString(ntfs_error Error)
 {
     switch (Error) {
     case NTFS_Error_Success:                 return "ntfs success";
+    case NTFS_Error_MemoryError:             return "ntfs failed to allocate memory";
     case NTFS_Error_VolumeOpen:              return "ntfs failed opening handle to volume";
     case NTFS_Error_VolumeReadBootRecord:    return "ntfs failed reading volume boot record";
     case NTFS_Error_VolumeUnknownSignature:  return "ntfs failed unknown volume signature";
     case NTFS_Error_VolumePartitionNotFound: return "ntfs failed partition was not found";
     case NTFS_Error_VolumeFailedValidation:  return "ntfs failed volume fields validation";
+    case NTFS_Error_RecordFailedRead:        return "ntfs failed reading mft file record";
+    case NTFS_Error_RecordFailedValidation:  return "ntfs failed file record validation";
     }
 
     return "";
@@ -127,6 +135,109 @@ NTFS_API bool        NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From,
                                      void *Buffer, size_t Size);
 
 NTFS_API ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset);
+
+enum {
+    NTFS_SystemFile_Mft        =  0,
+    NTFS_SystemFile_MftMirror  =  1,
+    NTFS_SystemFile_LogFile    =  2,
+    NTFS_SystemFile_Volume     =  3,
+    NTFS_SystemFile_AttrDef    =  4,
+    NTFS_SystemFile_RootFolder =  5,
+    NTFS_SystemFile_Bitmap     =  6,
+    NTFS_SystemFile_Boot       =  7,
+    NTFS_SystemFile_BadClus    =  8,
+    NTFS_SystemFile_Secure     =  9,
+    NTFS_SystemFile_UpCase     = 10,
+    NTFS_SystemFile_Extend     = 11,
+};
+
+enum {
+    NTFS_AttributeFlag_Compressed = 0x0001,
+    NTFS_AttributeFlag_Encrypted  = 0x4000,
+    NTFS_AttributeFlag_Sparse     = 0x8000,
+};
+
+typedef enum {
+    NTFS_AttributeType_StandardInformation = 0x10,
+    NTFS_AttributeType_AttributeList       = 0x20,
+    NTFS_AttributeType_FileName            = 0x30,
+    NTFS_AttributeType_VolumeVersion       = 0x40,
+    NTFS_AttributeType_SecurityDescriptor  = 0x50,
+    NTFS_AttributeType_VolumeName          = 0x60,
+    NTFS_AttributeType_VolumeInformation   = 0x70,
+    NTFS_AttributeType_Data                = 0x80,
+    NTFS_AttributeType_IndexRoot           = 0x90,
+    NTFS_AttributeType_IndexAllocation     = 0xA0,
+    NTFS_AttributeType_Bitmap              = 0xB0,
+    NTFS_AttributeType_SymbolicLink        = 0xC0,
+    NTFS_AttributeType_EaInformation       = 0xD0,
+    NTFS_AttributeType_Ea                  = 0xE0,
+    NTFS_AttributeType_PropertySet         = 0xF0,
+} ntfs_attr_type;
+
+static inline char *NTFS_AttrTypeToString(ntfs_attr_type Type)
+{
+    switch (Type) {
+        case NTFS_AttributeType_StandardInformation: return "StandardInformation";
+        case NTFS_AttributeType_AttributeList:       return "AttributeList";
+        case NTFS_AttributeType_FileName:            return "FileName";
+        case NTFS_AttributeType_VolumeVersion:       return "VolumeVersion";
+        case NTFS_AttributeType_SecurityDescriptor:  return "SecurityDescriptor";
+        case NTFS_AttributeType_VolumeName:          return "VolumeName";
+        case NTFS_AttributeType_VolumeInformation:   return "VolumeInformation";
+        case NTFS_AttributeType_Data:                return "Data";
+        case NTFS_AttributeType_IndexRoot:           return "IndexRoot";
+        case NTFS_AttributeType_IndexAllocation:     return "IndexAllocation";
+        case NTFS_AttributeType_Bitmap:              return "Bitmap";
+        case NTFS_AttributeType_SymbolicLink:        return "SymbolicLink";
+        case NTFS_AttributeType_EaInformation:       return "EaInformation";
+        case NTFS_AttributeType_Ea:                  return "Ea";
+        case NTFS_AttributeType_PropertySet:         return "PropertySet";
+    }
+
+    return "(unknown)";
+}
+
+typedef struct {
+    uint64_t StartVCN;
+    uint64_t Count;
+} ntfs_data_run;
+
+typedef struct {
+    ntfs_attr_type Type;
+    bool           NonResFlag;
+    uint8_t        NameLength;
+    uint16_t      *Name;
+    uint16_t       Flags;
+    uint16_t       Id;
+
+    struct {
+        uint8_t *Data;
+        uint32_t Size;
+    } Resident;
+
+    struct {
+        uint64_t Size;
+        ntfs_data_run *RunList;
+    } NonResident;
+} ntfs_attr;
+
+typedef struct {
+    ntfs_error Error;
+    ntfs_arena Arena;
+
+    bool       IsDir;
+    void      *Buffer;
+    ntfs_attr *AttrList;
+} ntfs_file;
+
+#define NTFS_FILE_RECORD_MAGIC           0x454C4946
+#define NTFS_FILE_RECORD_ATTR_END_MARKER 0xFFFFFFFF
+
+NTFS_API ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index);
+NTFS_API void      NTFS_FileClose(ntfs_file *File);
+
+NTFS_API ntfs_data_run *NTFS__DataRunsLoad(ntfs_arena *Arena, void *Buffer, size_t Size);
 
 #endif   // NTFS_PARSER_H
 
@@ -448,6 +559,147 @@ bool NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From, void *Buffer, size_t Si
     bool Result = NTFS__Win32FileRead(Volume->Handle, From + Volume->StartOffset,
                                       Buffer, Size);
     return Result;
+}
+
+ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
+{
+    ntfs_file Result = {
+        .Arena = NTFS__ArenaDefault(),
+    };
+
+    if (Result.Arena.Buffer == 0) {
+        NTFS_RETURN(&Result, NTFS_Error_MemoryError);
+    }
+
+    uint64_t RecordOffset = Volume->MftCluster * Volume->BytesPerCluster
+                            + (Index * Volume->BytesPerMftEntry);
+    uint8_t *FileRecord   = NTFS__ArenaAlloc(&Result.Arena, Volume->BytesPerMftEntry);
+    if (!NTFS_VolumeRead(Volume, RecordOffset, FileRecord, Volume->BytesPerMftEntry)) {
+        NTFS_RETURN(&Result, NTFS_Error_RecordFailedRead);
+    }
+    Result.Buffer = FileRecord;
+
+    uint32_t Magic     = *NTFS_CAST(uint32_t *, &FileRecord[0x00]);
+    uint16_t Offset    = *NTFS_CAST(uint16_t *, &FileRecord[0x14]);
+    uint16_t Flags     = *NTFS_CAST(uint16_t *, &FileRecord[0x16]);
+    uint32_t RealSize  = *NTFS_CAST(uint32_t *, &FileRecord[0x18]);
+    uint32_t AllocSize = *NTFS_CAST(uint32_t *, &FileRecord[0x1C]);
+    uint32_t MftIndex  = *NTFS_CAST(uint32_t *, &FileRecord[0x2C]);
+
+    bool IsValid = Magic == NTFS_FILE_RECORD_MAGIC;
+    IsValid     &= Offset < RealSize;
+    IsValid     &= RealSize <= AllocSize && AllocSize == Volume->BytesPerMftEntry;
+    IsValid     &= MftIndex == Index;
+    IsValid     &= Flags & 0x01;
+    if (!IsValid) {
+        NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+    }
+    Result.IsDir = Flags & 0x02;
+
+    uint8_t *AttrPtr    = FileRecord + Offset;
+    uint8_t *AttrEndPtr = AttrPtr + RealSize;
+    while (AttrPtr < AttrEndPtr) {
+        uint32_t Marker = *NTFS_CAST(uint32_t *, AttrPtr);
+        if (Marker == NTFS_FILE_RECORD_ATTR_END_MARKER) {
+            break;
+        }
+
+        uint32_t AttrTotalSize  = *NTFS_CAST(uint32_t *, &AttrPtr[0x04]);
+        uint32_t AttrNameOffset = *NTFS_CAST(uint16_t *, &AttrPtr[0x0A]);
+        if (AttrPtr + AttrTotalSize > AttrEndPtr) {
+            NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+        }
+
+        ntfs_attr Attr  = { 0 };
+        Attr.Type       = *NTFS_CAST(uint32_t *, &AttrPtr[0x00]);
+        Attr.NonResFlag = AttrPtr[0x08] == 1;
+        Attr.NameLength = *NTFS_CAST(uint8_t  *, &AttrPtr[0x09]);
+        Attr.Flags      = *NTFS_CAST(uint16_t *, &AttrPtr[0x0C]);
+        Attr.Id         = *NTFS_CAST(uint16_t *, &AttrPtr[0x0E]);
+        if (Attr.NameLength) {
+            if (AttrNameOffset + Attr.NameLength >= AttrTotalSize) {
+                NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+            }
+
+            Attr.Name = NTFS_CAST(uint16_t *, AttrPtr + AttrNameOffset);
+        }
+
+        if (Attr.NonResFlag) {
+            uint16_t AttrOffset    = *NTFS_CAST(uint16_t *, &AttrPtr[0x20]);
+            uint64_t AttrAllocSize = *NTFS_CAST(uint64_t *, &AttrPtr[0x28]);
+            uint64_t AttrRealSize  = *NTFS_CAST(uint64_t *, &AttrPtr[0x30]);
+            if (AttrRealSize > AttrAllocSize) {
+                NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+            }
+
+            Attr.NonResident.Size    = RealSize;
+            Attr.NonResident.RunList =
+                NTFS__DataRunsLoad(&Result.Arena, AttrPtr + AttrOffset,
+                                   AttrTotalSize - AttrOffset);
+
+        } else {
+            uint32_t AttrSize   = *NTFS_CAST(uint32_t *, &AttrPtr[0x10]);
+            uint16_t AttrOffset = *NTFS_CAST(uint16_t *, &AttrPtr[0x14]);
+            if (AttrOffset + AttrSize > AttrTotalSize) {
+                NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+            }
+
+            Attr.Resident.Size = AttrSize;
+            if (Attr.Resident.Size > 0) {
+                Attr.Resident.Data = AttrPtr + AttrOffset;
+            }
+        }
+
+        NTFS__ListPush(&Result.Arena, Result.AttrList, Attr);
+        AttrPtr += AttrTotalSize;
+    }
+
+skip:
+    return Result;
+}
+
+ntfs_data_run *NTFS__DataRunsLoad(ntfs_arena *Arena, void *Buffer, size_t Size)
+{
+    uint8_t *DataRunPtr    = NTFS_CAST(uint8_t *, Buffer);
+    uint8_t *DataRunEndPtr = DataRunPtr + Size;
+
+    ntfs_data_run *Result  = 0;
+    uint64_t       PrevVCN = 0;
+    while (DataRunPtr < DataRunEndPtr) {
+        if (*DataRunPtr == 0) {
+            break;
+        }
+
+        uint8_t LenSize =  *DataRunPtr & 0x0F;
+        uint8_t OffSize = (*DataRunPtr & 0xF0) >> 4;
+        DataRunPtr++;
+
+        uint64_t Length = 0;
+        for (int j = 0; j < LenSize; j++) {
+            Length |= *DataRunPtr << (8 * j);
+            DataRunPtr++;
+        }
+
+        int64_t Offset = 0;
+        for (int j = 0; j < OffSize; j++) {
+            Offset |= *DataRunPtr << (8 * j);
+            DataRunPtr++;
+        }
+
+        ntfs_data_run Run = { .Count = Length, .StartVCN = (PrevVCN += Offset) };
+        NTFS__ListPush(Arena, Result, Run);
+    }
+
+    return Result;
+}
+
+void NTFS_FileClose(ntfs_file *File)
+{
+    if (File->Arena.Buffer) {
+        NTFS__ArenaDestroy(&File->Arena);
+    }
+
+    *File = (ntfs_file) { .Error = File->Error };
 }
 
 #endif  // NTFS_PARSER_IMPLEMENTATION
