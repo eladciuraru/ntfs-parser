@@ -403,7 +403,7 @@ void *NTFS__ArenaResizeAlloc(ntfs_arena *Arena, void *Address, size_t Size)
 {
     ntfs_arena_header *Header =
         NTFS_CAST(ntfs_arena_header *,
-                  &NTFS_CAST(uint8_t *, Address)[-sizeof(*Header)]);
+                  &NTFS_CAST(uint8_t *, Address)[0-sizeof(*Header)]);
 
     void *Result = &NTFS_CAST(uint8_t *, Arena->Buffer)[(Arena->Offset - Header->Size)];
     if (Result == Header) {  // Provided allocation is last allocation
