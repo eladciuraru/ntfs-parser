@@ -158,41 +158,43 @@ enum {
 };
 
 typedef enum {
-    NTFS_AttributeType_StandardInformation = 0x10,
-    NTFS_AttributeType_AttributeList       = 0x20,
-    NTFS_AttributeType_FileName            = 0x30,
-    NTFS_AttributeType_VolumeVersion       = 0x40,
-    NTFS_AttributeType_SecurityDescriptor  = 0x50,
-    NTFS_AttributeType_VolumeName          = 0x60,
-    NTFS_AttributeType_VolumeInformation   = 0x70,
-    NTFS_AttributeType_Data                = 0x80,
-    NTFS_AttributeType_IndexRoot           = 0x90,
-    NTFS_AttributeType_IndexAllocation     = 0xA0,
-    NTFS_AttributeType_Bitmap              = 0xB0,
-    NTFS_AttributeType_SymbolicLink        = 0xC0,
-    NTFS_AttributeType_EaInformation       = 0xD0,
-    NTFS_AttributeType_Ea                  = 0xE0,
-    NTFS_AttributeType_PropertySet         = 0xF0,
+    NTFS_AttributeType_StandardInformation =  0x10,
+    NTFS_AttributeType_AttributeList       =  0x20,
+    NTFS_AttributeType_FileName            =  0x30,
+    NTFS_AttributeType_VolumeVersion       =  0x40,
+    NTFS_AttributeType_SecurityDescriptor  =  0x50,
+    NTFS_AttributeType_VolumeName          =  0x60,
+    NTFS_AttributeType_VolumeInformation   =  0x70,
+    NTFS_AttributeType_Data                =  0x80,
+    NTFS_AttributeType_IndexRoot           =  0x90,
+    NTFS_AttributeType_IndexAllocation     =  0xA0,
+    NTFS_AttributeType_Bitmap              =  0xB0,
+    NTFS_AttributeType_SymbolicLink        =  0xC0,
+    NTFS_AttributeType_EaInformation       =  0xD0,
+    NTFS_AttributeType_Ea                  =  0xE0,
+    NTFS_AttributeType_PropertySet         =  0xF0,
+    NTFS_AttributeType_LoggedUtilityStream = 0x100,
 } ntfs_attr_type;
 
 static inline char *NTFS_AttrTypeToString(ntfs_attr_type Type)
 {
     switch (Type) {
-        case NTFS_AttributeType_StandardInformation: return "StandardInformation";
-        case NTFS_AttributeType_AttributeList:       return "AttributeList";
-        case NTFS_AttributeType_FileName:            return "FileName";
-        case NTFS_AttributeType_VolumeVersion:       return "VolumeVersion";
-        case NTFS_AttributeType_SecurityDescriptor:  return "SecurityDescriptor";
-        case NTFS_AttributeType_VolumeName:          return "VolumeName";
-        case NTFS_AttributeType_VolumeInformation:   return "VolumeInformation";
+        case NTFS_AttributeType_StandardInformation: return "Standard Information";
+        case NTFS_AttributeType_AttributeList:       return "Attribute List";
+        case NTFS_AttributeType_FileName:            return "File Name";
+        case NTFS_AttributeType_VolumeVersion:       return "Volume Version";
+        case NTFS_AttributeType_SecurityDescriptor:  return "Security Descriptor";
+        case NTFS_AttributeType_VolumeName:          return "Volume Name";
+        case NTFS_AttributeType_VolumeInformation:   return "Volume Information";
         case NTFS_AttributeType_Data:                return "Data";
-        case NTFS_AttributeType_IndexRoot:           return "IndexRoot";
-        case NTFS_AttributeType_IndexAllocation:     return "IndexAllocation";
+        case NTFS_AttributeType_IndexRoot:           return "Index Root";
+        case NTFS_AttributeType_IndexAllocation:     return "Index Allocation";
         case NTFS_AttributeType_Bitmap:              return "Bitmap";
-        case NTFS_AttributeType_SymbolicLink:        return "SymbolicLink";
-        case NTFS_AttributeType_EaInformation:       return "EaInformation";
+        case NTFS_AttributeType_SymbolicLink:        return "Symbolic Link";
+        case NTFS_AttributeType_EaInformation:       return "Ea Information";
         case NTFS_AttributeType_Ea:                  return "Ea";
-        case NTFS_AttributeType_PropertySet:         return "PropertySet";
+        case NTFS_AttributeType_PropertySet:         return "Property Set";
+        case NTFS_AttributeType_LoggedUtilityStream: return "Logged Utility Stream";
     }
 
     return "(unknown)";
