@@ -325,8 +325,8 @@ static bool NTFS__Win32FileRead(void *Handle, uint64_t Offset, void *Buffer, siz
     NTFS_ASSERT(Size == NTFS_CAST(uint32_t, Size), "Not supporting reading 64bit size");
 
     OVERLAPPED Overlapped = {
-        .Offset     =  Offset & 0xFFFFFFFF,
-        .OffsetHigh = (Offset & 0xFFFFFFFF) >> 32,
+        .Offset     = Offset  & 0xFFFFFFFF,
+        .OffsetHigh = Offset >> 32,
     };
     DWORD BytesRead = 0;
     BOOL  Result    =
