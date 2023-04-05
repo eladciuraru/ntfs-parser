@@ -12,8 +12,8 @@
 
 #define NTFS_UNUSED(name)           (void) (name)
 #define NTFS_CAST(type, value)      ((type) (value))
-#define NTFS_RETURN(name, error)    \
-    NTFS_STATEMENT((name)->Error = error; goto skip;)
+#define NTFS_RETURN(name, value)    \
+    NTFS_STATEMENT((name) = (value); goto skip;)
 
 #define NTFS_WSTRINGIFY_(s) L ## s
 #define NTFS_WSTRINGIFY(s)  NTFS_WSTRINGIFY_(s)
@@ -455,7 +455,7 @@ ntfs_volume NTFS_VolumeOpen(char DriveLetter)
     DrivePath[4]        = NTFS_CAST(wchar_t, DriveLetter);
     void *VolumeHandle  = NTFS__Win32FileOpen(DrivePath);
     if (VolumeHandle == 0) {
-        NTFS_RETURN(&Result, NTFS_Error_VolumeOpen);
+        NTFS_RETURN(Result.Error, NTFS_Error_VolumeOpen);
     }
 
     Result = NTFS__VolumeLoad(VolumeHandle, 0);
@@ -470,17 +470,17 @@ ntfs_volume NTFS_VolumeOpenFromFile(wchar_t *Path)
 
     void *VolumeHandle = NTFS__Win32FileOpen(Path);
     if (VolumeHandle == 0) {
-        NTFS_RETURN(&Result, NTFS_Error_VolumeOpen);
+        NTFS_RETURN(Result.Error, NTFS_Error_VolumeOpen);
     }
 
     uint8_t BootSector[NTFS_BOOT_RECORD_SIZE];
     if (!NTFS__Win32FileRead(VolumeHandle, 0, &BootSector, sizeof(BootSector))) {
-        NTFS_RETURN(&Result, NTFS_Error_VolumeReadBootRecord);
+        NTFS_RETURN(Result.Error, NTFS_Error_VolumeReadBootRecord);
     }
 
     uint16_t Signature = *NTFS_CAST(uint16_t *, &BootSector[510]);
     if (Signature != NTFS_BOOT_RECORD_SIGNATURE) {
-        NTFS_RETURN(&Result, NTFS_Error_VolumeUnknownSignature);
+        NTFS_RETURN(Result.Error, NTFS_Error_VolumeUnknownSignature);
     }
 
     uint8_t *PartitionTable = &BootSector[NTFS_BOOT_RECORD_PARTITION_OFFSET];
@@ -520,12 +520,12 @@ ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
 
     uint8_t BootSector[NTFS_BOOT_RECORD_SIZE];
     if (!NTFS_VolumeRead(&Result, 0, &BootSector, sizeof(BootSector))) {
-        NTFS_RETURN(&Result, NTFS_Error_VolumeReadBootRecord);
+        NTFS_RETURN(Result.Error, NTFS_Error_VolumeReadBootRecord);
     };
 
     uint16_t Signature = *NTFS_CAST(uint16_t *, &BootSector[510]);
     if (Signature != NTFS_BOOT_RECORD_SIGNATURE) {
-        NTFS_RETURN(&Result, NTFS_Error_VolumeUnknownSignature);
+        NTFS_RETURN(Result.Error, NTFS_Error_VolumeUnknownSignature);
     }
 
     Result.BytesPerSector    = *NTFS_CAST(uint16_t *, &BootSector[0x0B]);
@@ -544,7 +544,7 @@ ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
     IsValid     &= NTFS__IsPowerOf2(Result.SectorsPerCluster);
     IsValid     &= Result.BytesPerMftEntry <= Result.BytesPerCluster;
     if (!IsValid) {
-        NTFS_RETURN(&Result, NTFS_Error_VolumeFailedValidation);
+        NTFS_RETURN(Result.Error, NTFS_Error_VolumeFailedValidation);
     }
 
 skip:
@@ -570,14 +570,14 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
     };
 
     if (Result.Arena.Buffer == 0) {
-        NTFS_RETURN(&Result, NTFS_Error_MemoryError);
+        NTFS_RETURN(Result.Error, NTFS_Error_MemoryError);
     }
 
     uint64_t RecordOffset = Volume->MftCluster * Volume->BytesPerCluster
                             + (Index * Volume->BytesPerMftEntry);
     uint8_t *FileRecord   = NTFS__ArenaAlloc(&Result.Arena, Volume->BytesPerMftEntry);
     if (!NTFS_VolumeRead(Volume, RecordOffset, FileRecord, Volume->BytesPerMftEntry)) {
-        NTFS_RETURN(&Result, NTFS_Error_RecordFailedRead);
+        NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedRead);
     }
     Result.Buffer = FileRecord;
 
@@ -594,7 +594,7 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
     IsValid     &= MftIndex == Index;
     IsValid     &= Flags & 0x01;
     if (!IsValid) {
-        NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+        NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
     }
     Result.IsDir = Flags & 0x02;
 
@@ -609,7 +609,7 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
         uint32_t AttrTotalSize  = *NTFS_CAST(uint32_t *, &AttrPtr[0x04]);
         uint32_t AttrNameOffset = *NTFS_CAST(uint16_t *, &AttrPtr[0x0A]);
         if (AttrPtr + AttrTotalSize > AttrEndPtr) {
-            NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+            NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
         }
 
         ntfs_attr Attr  = { 0 };
@@ -620,7 +620,7 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
         Attr.Id         = *NTFS_CAST(uint16_t *, &AttrPtr[0x0E]);
         if (Attr.NameLength) {
             if (AttrNameOffset + Attr.NameLength >= AttrTotalSize) {
-                NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+                NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
             }
 
             Attr.Name = NTFS_CAST(uint16_t *, AttrPtr + AttrNameOffset);
@@ -631,7 +631,7 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
             uint64_t AttrAllocSize = *NTFS_CAST(uint64_t *, &AttrPtr[0x28]);
             uint64_t AttrRealSize  = *NTFS_CAST(uint64_t *, &AttrPtr[0x30]);
             if (AttrRealSize > AttrAllocSize) {
-                NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+                NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
             }
 
             Attr.NonResident.Size    = RealSize;
@@ -643,7 +643,7 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
             uint32_t AttrSize   = *NTFS_CAST(uint32_t *, &AttrPtr[0x10]);
             uint16_t AttrOffset = *NTFS_CAST(uint16_t *, &AttrPtr[0x14]);
             if (AttrOffset + AttrSize > AttrTotalSize) {
-                NTFS_RETURN(&Result, NTFS_Error_RecordFailedValidation);
+                NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
             }
 
             Attr.Resident.Size = AttrSize;
