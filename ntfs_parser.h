@@ -87,6 +87,8 @@ typedef enum {
     NTFS_Error_VolumeUnknownSignature,
     NTFS_Error_VolumePartitionNotFound,
     NTFS_Error_VolumeFailedValidation,
+    NTFS_Error_VolumeFailedLoadInfoFile,
+    NTFS_Error_VolumeUnsupportedVersion,
 
     // File record related errors
     NTFS_Error_RecordFailedRead,
@@ -96,15 +98,17 @@ typedef enum {
 static inline char *NTFS_ErrorToString(ntfs_error Error)
 {
     switch (Error) {
-    case NTFS_Error_Success:                 return "ntfs success";
-    case NTFS_Error_MemoryError:             return "ntfs failed to allocate memory";
-    case NTFS_Error_VolumeOpen:              return "ntfs failed opening handle to volume";
-    case NTFS_Error_VolumeReadBootRecord:    return "ntfs failed reading volume boot record";
-    case NTFS_Error_VolumeUnknownSignature:  return "ntfs failed unknown volume signature";
-    case NTFS_Error_VolumePartitionNotFound: return "ntfs failed partition was not found";
-    case NTFS_Error_VolumeFailedValidation:  return "ntfs failed volume fields validation";
-    case NTFS_Error_RecordFailedRead:        return "ntfs failed reading mft file record";
-    case NTFS_Error_RecordFailedValidation:  return "ntfs failed file record validation";
+    case NTFS_Error_Success:                  return "ntfs success";
+    case NTFS_Error_MemoryError:              return "ntfs failed to allocate memory";
+    case NTFS_Error_VolumeOpen:               return "ntfs failed opening handle to volume";
+    case NTFS_Error_VolumeReadBootRecord:     return "ntfs failed reading volume boot record";
+    case NTFS_Error_VolumeUnknownSignature:   return "ntfs failed unknown volume signature";
+    case NTFS_Error_VolumePartitionNotFound:  return "ntfs failed partition was not found";
+    case NTFS_Error_VolumeFailedValidation:   return "ntfs failed volume fields validation";
+    case NTFS_Error_VolumeFailedLoadInfoFile: return "ntfs failed volume information file";
+    case NTFS_Error_VolumeUnsupportedVersion: return "ntfs failed volume unsupported version";
+    case NTFS_Error_RecordFailedRead:         return "ntfs failed reading mft file record";
+    case NTFS_Error_RecordFailedValidation:   return "ntfs failed file record validation";
     }
 
     return "";
@@ -121,6 +125,7 @@ typedef struct {
     uint64_t BytesPerSector;
     uint64_t BytesPerCluster;
     uint64_t BytesPerMftEntry;
+    uint16_t Name[128];
 } ntfs_volume;
 
 #define NTFS_BOOT_RECORD_SIZE                512
@@ -135,6 +140,7 @@ NTFS_API bool        NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From,
                                      void *Buffer, size_t Size);
 
 NTFS_API ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset);
+NTFS_API void        NTFS__VolumeLoadInformation(ntfs_volume *Volume);
 
 enum {
     NTFS_SystemFile_Mft        =  0,
@@ -510,6 +516,18 @@ void NTFS_VolumeClose(ntfs_volume *Volume)
     *Volume = (ntfs_volume) { .Error = Volume->Error};
 }
 
+bool NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From, void *Buffer, size_t Size)
+{
+    NTFS_ASSERT((From & (Volume->BytesPerSector - 1)) == 0,
+                "volume read offset is not aligned to volume sector size");
+    NTFS_ASSERT((Size & (Volume->BytesPerSector - 1)) == 0,
+                "volume read size is not aligned to volume sector size");
+
+    bool Result = NTFS__Win32FileRead(Volume->Handle, From + Volume->StartOffset,
+                                      Buffer, Size);
+    return Result;
+}
+
 ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
 {
     ntfs_volume Result = {
@@ -547,20 +565,37 @@ ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
         NTFS_RETURN(Result.Error, NTFS_Error_VolumeFailedValidation);
     }
 
+    NTFS__VolumeLoadInformation(&Result);
+
 skip:
     return Result;
 }
 
-bool NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From, void *Buffer, size_t Size)
+void NTFS__VolumeLoadInformation(ntfs_volume *Volume)
 {
-    NTFS_ASSERT((From & (Volume->BytesPerSector - 1)) == 0,
-                "volume read offset is not aligned to volume sector size");
-    NTFS_ASSERT((Size & (Volume->BytesPerSector - 1)) == 0,
-                "volume read size is not aligned to volume sector size");
+    ntfs_file VolumeFile = NTFS_FileOpenFromIndex(Volume, NTFS_SystemFile_Volume);
+    if (VolumeFile.Error) {
+        NTFS_RETURN(Volume->Error, NTFS_Error_VolumeFailedLoadInfoFile);
+    }
 
-    bool Result = NTFS__Win32FileRead(Volume->Handle, From + Volume->StartOffset,
-                                      Buffer, Size);
-    return Result;
+    for (size_t Index = 0; Index < NTFS__ListLen(VolumeFile.AttrList); Index++) {
+        ntfs_attr *Attr = VolumeFile.AttrList + Index;
+
+        if (Attr->Type == NTFS_AttributeType_VolumeName) {
+            NTFS_MEM_COPY(Volume->Name, sizeof(Volume->Name) - 2,
+                          Attr->Resident.Data, Attr->Resident.Size);
+
+        } else if (Attr->Type == NTFS_AttributeType_VolumeInformation) {
+            uint8_t Major = Attr->Resident.Data[0x08];
+            uint8_t Minor = Attr->Resident.Data[0x09];
+            if (!(Major == 3 && Minor == 1)) {
+                NTFS_RETURN(Volume->Error, NTFS_Error_VolumeUnsupportedVersion);
+            }
+        }
+    }
+
+skip:
+    NTFS_FileClose(&VolumeFile);
 }
 
 ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
