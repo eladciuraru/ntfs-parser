@@ -5,6 +5,7 @@
 #include <windows.h>
 
 void PrintHexDump(void *Buffer, size_t Size);
+void PrintFileTime(uint64_t FileTime);
 
 #define RETURN_SKIP(value)    NTFS_STATEMENT(Result = 1; goto skip;)
 #define BOOL_TO_STRING(value) ((char *[]){"false", "true"}[value])
@@ -30,6 +31,30 @@ int main(void)
         printf("error: %s\n", NTFS_ErrorToString(File.Error));
         RETURN_SKIP(1);
     }
+
+    printf("File information:\n");
+    printf("    Name:         %ls\n", File.Name);
+    printf("    Size:         %lld\n", File.Size);
+    printf("    Flags:        0x%04x\n", File.Flags.Value);
+
+    printf("    CreationTime: ");
+    PrintFileTime(File.CreationTime);
+    printf("\n");
+
+    printf("    ModifiedTime: ");
+    PrintFileTime(File.ModifiedTime);
+    printf("\n");
+
+    printf("    ChangedTime:  ");
+    PrintFileTime(File.ChangedTime);
+    printf("\n");
+
+    printf("    ReadTime:     ");
+    PrintFileTime(File.ReadTime);
+    printf("\n");
+
+    printf("    Parent Index: %lld\n", File.ParentIndex);
+    printf("\n\n");
 
     for (size_t i = 0; i < NTFS__ListLen(File.Record.AttrList); i++) {
         ntfs_attr *Attr = File.Record.AttrList + i;
@@ -108,4 +133,23 @@ void PrintHexDump(void *Buffer, size_t Size)
         }
     }
     printf("%08llx:\n", Size);
+}
+
+void PrintFileTime(uint64_t FileTime)
+{
+    FILETIME  FileTime_ = {
+        .dwHighDateTime = FileTime >> 32,
+        .dwLowDateTime  = FileTime  & 0xFFFFFFFF,
+    };
+    SYSTEMTIME SystemTime = { 0 };
+    FileTimeToSystemTime(&FileTime_, &SystemTime);
+
+    wchar_t TimeStr[260];
+    wchar_t DateStr[260];
+    GetDateFormatW(LOCALE_SYSTEM_DEFAULT, DATE_SHORTDATE,
+                   &SystemTime, 0, DateStr, ARRAYSIZE(TimeStr));
+    GetTimeFormatW(LOCALE_SYSTEM_DEFAULT, TIME_FORCE24HOURFORMAT,
+                   &SystemTime, 0, TimeStr, ARRAYSIZE(TimeStr));
+
+    printf("%ls %ls", DateStr, TimeStr);
 }

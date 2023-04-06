@@ -93,9 +93,10 @@ typedef enum {
     NTFS_Error_VolumeUnsupportedVersion,
     NTFS_Error_VolumeFailedLoadCaseTable,
 
-    // File record related errors
+    // File related errors
     NTFS_Error_RecordFailedRead,
     NTFS_Error_RecordFailedValidation,
+    NTFS_Error_FileFailedInfoValidation,
 } ntfs_error;
 
 static inline char *NTFS_ErrorToString(ntfs_error Error)
@@ -113,6 +114,7 @@ static inline char *NTFS_ErrorToString(ntfs_error Error)
     case NTFS_Error_VolumeFailedLoadCaseTable: return "ntfs failed volume load case table";
     case NTFS_Error_RecordFailedRead:          return "ntfs failed reading mft file record";
     case NTFS_Error_RecordFailedValidation:    return "ntfs failed file record validation";
+    case NTFS_Error_FileFailedInfoValidation:  return "ntfs failed file validation extra info";
     }
 
     return "";
@@ -212,6 +214,22 @@ static inline char *NTFS_AttrTypeToString(ntfs_attr_type Type)
     return "(unknown)";
 }
 
+enum {
+    NTFS_FileFlags_ReadOnly          = 0x0001,
+    NTFS_FileFlags_Hidden            = 0x0002,
+    NTFS_FileFlags_System            = 0x0004,
+    NTFS_FileFlags_Archive           = 0x0020,
+    NTFS_FileFlags_Device            = 0x0040,
+    NTFS_FileFlags_Normal            = 0x0080,
+    NTFS_FileFlags_Temporary         = 0x0100,
+    NTFS_FileFlags_SparseFile        = 0x0200,
+    NTFS_FileFlags_ReparsePoint      = 0x0400,
+    NTFS_FileFlags_Compressed        = 0x0800,
+    NTFS_FileFlags_Offline           = 0x1000,
+    NTFS_FileFlags_NotContentIndexed = 0x2000,
+    NTFS_FileFlags_Encrypted         = 0x4000,
+};
+
 typedef struct {
     uint64_t StartVCN;
     uint64_t Count;
@@ -252,6 +270,35 @@ typedef struct {
     ntfs_volume *Volume;
 
     ntfs_record Record;
+
+    uint64_t CreationTime;
+    uint64_t ModifiedTime;
+    uint64_t ChangedTime;
+    uint64_t ReadTime;
+    union {
+        struct {
+            uint32_t ReadOnly          : 1;
+            uint32_t Hidden            : 1;
+            uint32_t System            : 1;
+            uint32_t _                 : 1;
+            uint32_t Archive           : 1;
+            uint32_t Device            : 1;
+            uint32_t Normal            : 1;
+            uint32_t Temporary         : 1;
+            uint32_t SparseFile        : 1;
+            uint32_t ReparsePoint      : 1;
+            uint32_t Compressed        : 1;
+            uint32_t Offline           : 1;
+            uint32_t NotContentIndexed : 1;
+            uint32_t Encrypted         : 1;
+        } F;
+
+        uint32_t Value;
+    } Flags;
+    uint64_t  ParentIndex;
+    uint64_t  AlignedSize;
+    uint64_t  Size;
+    uint16_t *Name;
 } ntfs_file;
 
 #define NTFS_FILE_RECORD_MAGIC           0x454C4946
@@ -692,7 +739,65 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
     }
 
     Result.Record = NTFS__RecordLoadFromIndex(Volume, &Result.Arena, Index);
-    Result.Error  = Result.Record.Error;
+    if (Result.Record.Error) {
+        NTFS_RETURN(Result.Error, Result.Record.Error);
+    }
+
+    bool HasStdInfo  = false;
+    bool HasFileName = false;
+    for (size_t i = 0; i < NTFS__ListLen(Result.Record.AttrList); i++) {
+        ntfs_attr *Attr = Result.Record.AttrList + i;
+
+        if (Attr->NonResFlag) {
+            continue;
+        }
+
+        if (Attr->Type == NTFS_AttributeType_StandardInformation) {
+            HasStdInfo = true;
+
+            Result.CreationTime = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x00);
+            Result.ModifiedTime = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x08);
+            Result.ChangedTime  = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x10);
+            Result.ReadTime     = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x18);
+            Result.Flags.Value  = *NTFS_CAST(uint32_t *, Attr->Resident.Data + 0x20);
+
+            bool IsValid = (Result.CreationTime & INT64_MIN) == 0;
+            IsValid     &= (Result.ModifiedTime & INT64_MIN) == 0;
+            IsValid     &= (Result.ChangedTime  & INT64_MIN) == 0;
+            IsValid     &= (Result.ReadTime     & INT64_MIN) == 0;
+            if (!IsValid) {
+                NTFS_RETURN(Result.Error, NTFS_Error_FileFailedInfoValidation);
+            }
+
+        } else if (Attr->Type == NTFS_AttributeType_FileName) {
+            HasFileName = true;
+
+            Result.ParentIndex =
+                *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x00) & ~(INT64_MIN >> 16);
+            Result.AlignedSize = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x28);
+            Result.Size        = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x30);
+
+            if (Result.Size > Result.AlignedSize ||
+                !NTFS__IsAligned(Result.AlignedSize, Volume->BytesPerCluster)) {
+                NTFS_RETURN(Result.Error, NTFS_Error_FileFailedInfoValidation);
+            }
+
+            uint8_t NameLength = Attr->Resident.Data[0x40];
+            uint8_t NameSpace  = Attr->Resident.Data[0x41];
+            if (NameLength > (Attr->Resident.Size - 0x42) || NameSpace != 0x03) {
+                NTFS_RETURN(Result.Error, NTFS_Error_FileFailedInfoValidation);
+            }
+
+            Result.Name =
+                NTFS__PushCopyWStringZ(&Result.Arena,
+                                       NTFS_CAST(uint16_t *, Attr->Resident.Data + 0x42),
+                                       NameLength);
+        }
+    }
+
+    if (!HasStdInfo || !HasFileName) {
+        NTFS_RETURN(Result.Error, NTFS_Error_FileFailedInfoValidation);
+    }
 
 skip:
     return Result;
