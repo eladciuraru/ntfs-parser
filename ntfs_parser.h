@@ -240,6 +240,7 @@ typedef struct {
 typedef struct {
     ntfs_error Error;
 
+    uint64_t  Index;
     uint8_t   *Buffer;
     ntfs_attr *AttrList;
     bool      IsDir;
@@ -724,6 +725,7 @@ ntfs_record NTFS__RecordLoadFromIndex(ntfs_volume *Volume, ntfs_arena *Arena, si
         NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
     }
     Result.IsDir = Flags & 0x02;
+    Result.Index = MftIndex;
 
     uint8_t *AttrPtr    = FileRecord + Offset;
     uint8_t *AttrEndPtr = AttrPtr + RealSize;
