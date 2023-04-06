@@ -226,6 +226,7 @@ typedef struct {
 
     struct {
         uint64_t Size;
+        uint64_t AlignedSize;
         ntfs_data_run *RunList;
     } NonResident;
 } ntfs_attr;
@@ -272,6 +273,19 @@ static inline size_t NTFS__Align(size_t Value, size_t Alignment)
     size_t Result = Value;
     if (Result % Alignment) {
         Result += (Alignment - (Result % Alignment));
+    }
+
+    return Result;
+}
+
+static inline bool NTFS__IsAligned(size_t Value, size_t Alignment)
+{
+    bool Result = false;
+
+    if (NTFS__IsPowerOf2(Alignment)) {
+        Result = (Value & (Alignment - 1)) == 0;
+    } else {
+        Result = (Value % Alignment) == 0;
     }
 
     return Result;
@@ -518,9 +532,9 @@ void NTFS_VolumeClose(ntfs_volume *Volume)
 
 bool NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From, void *Buffer, size_t Size)
 {
-    NTFS_ASSERT((From & (Volume->BytesPerSector - 1)) == 0,
+    NTFS_ASSERT(NTFS__IsAligned(From, Volume->BytesPerSector),
                 "volume read offset is not aligned to volume sector size");
-    NTFS_ASSERT((Size & (Volume->BytesPerSector - 1)) == 0,
+    NTFS_ASSERT(NTFS__IsAligned(Size, Volume->BytesPerSector),
                 "volume read size is not aligned to volume sector size");
 
     bool Result = NTFS__Win32FileRead(Volume->Handle, From + Volume->StartOffset,
@@ -665,11 +679,13 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
             uint16_t AttrOffset    = *NTFS_CAST(uint16_t *, &AttrPtr[0x20]);
             uint64_t AttrAllocSize = *NTFS_CAST(uint64_t *, &AttrPtr[0x28]);
             uint64_t AttrRealSize  = *NTFS_CAST(uint64_t *, &AttrPtr[0x30]);
-            if (AttrRealSize > AttrAllocSize) {
+            if (AttrRealSize > AttrAllocSize ||
+                !NTFS__IsAligned(AttrAllocSize, Volume->BytesPerCluster)) {
                 NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
             }
 
-            Attr.NonResident.Size    = RealSize;
+            Attr.NonResident.Size        = AttrRealSize;
+            Attr.NonResident.AlignedSize = AttrAllocSize;
             Attr.NonResident.RunList =
                 NTFS__DataRunsLoad(&Result.Arena, AttrPtr + AttrOffset,
                                    AttrTotalSize - AttrOffset);
