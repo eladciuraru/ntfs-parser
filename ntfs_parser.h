@@ -50,6 +50,7 @@ typedef struct {
     size_t Size;
 } ntfs_arena_header;
 
+#define NTFS__ARENA_KILOBYTE(value) (value * 1024)
 #define NTFS__ARENA_MEGABYTE(value) (value * 1024 * 1024)
 #define NTFS__ARENA_DEFAULT_COMMIT   NTFS__ARENA_MEGABYTE(1)
 #define NTFS__ARENA_DEFAULT_RESERVED NTFS__ARENA_MEGABYTE(16)
@@ -89,6 +90,7 @@ typedef enum {
     NTFS_Error_VolumeFailedValidation,
     NTFS_Error_VolumeFailedLoadInfoFile,
     NTFS_Error_VolumeUnsupportedVersion,
+    NTFS_Error_VolumeFailedLoadCaseTable,
 
     // File record related errors
     NTFS_Error_RecordFailedRead,
@@ -98,17 +100,18 @@ typedef enum {
 static inline char *NTFS_ErrorToString(ntfs_error Error)
 {
     switch (Error) {
-    case NTFS_Error_Success:                  return "ntfs success";
-    case NTFS_Error_MemoryError:              return "ntfs failed to allocate memory";
-    case NTFS_Error_VolumeOpen:               return "ntfs failed opening handle to volume";
-    case NTFS_Error_VolumeReadBootRecord:     return "ntfs failed reading volume boot record";
-    case NTFS_Error_VolumeUnknownSignature:   return "ntfs failed unknown volume signature";
-    case NTFS_Error_VolumePartitionNotFound:  return "ntfs failed partition was not found";
-    case NTFS_Error_VolumeFailedValidation:   return "ntfs failed volume fields validation";
-    case NTFS_Error_VolumeFailedLoadInfoFile: return "ntfs failed volume information file";
-    case NTFS_Error_VolumeUnsupportedVersion: return "ntfs failed volume unsupported version";
-    case NTFS_Error_RecordFailedRead:         return "ntfs failed reading mft file record";
-    case NTFS_Error_RecordFailedValidation:   return "ntfs failed file record validation";
+    case NTFS_Error_Success:                   return "ntfs success";
+    case NTFS_Error_MemoryError:               return "ntfs failed to allocate memory";
+    case NTFS_Error_VolumeOpen:                return "ntfs failed opening handle to volume";
+    case NTFS_Error_VolumeReadBootRecord:      return "ntfs failed reading volume boot record";
+    case NTFS_Error_VolumeUnknownSignature:    return "ntfs failed unknown volume signature";
+    case NTFS_Error_VolumePartitionNotFound:   return "ntfs failed partition was not found";
+    case NTFS_Error_VolumeFailedValidation:    return "ntfs failed volume fields validation";
+    case NTFS_Error_VolumeFailedLoadInfoFile:  return "ntfs failed volume load information file";
+    case NTFS_Error_VolumeUnsupportedVersion:  return "ntfs failed volume unsupported version";
+    case NTFS_Error_VolumeFailedLoadCaseTable: return "ntfs failed volume load case table";
+    case NTFS_Error_RecordFailedRead:          return "ntfs failed reading mft file record";
+    case NTFS_Error_RecordFailedValidation:    return "ntfs failed file record validation";
     }
 
     return "";
@@ -125,7 +128,9 @@ typedef struct {
     uint64_t BytesPerSector;
     uint64_t BytesPerCluster;
     uint64_t BytesPerMftEntry;
-    uint16_t Name[128];
+
+    uint16_t  Name[128];
+    uint16_t *CaseTable;
 } ntfs_volume;
 
 #define NTFS_BOOT_RECORD_SIZE                512
@@ -355,7 +360,8 @@ static void *NTFS__Win32MemoryAllocate(size_t Size, size_t CommittedSize)
 
     void *Result = VirtualAlloc(0, Size, MEM_RESERVE, PAGE_READWRITE);
     if (Result) {
-        Result = NTFS__Win32MemoryCommit(Result, CommittedSize);
+        CommittedSize = (CommittedSize == 0) ? Size : CommittedSize;
+        Result        = NTFS__Win32MemoryCommit(Result, CommittedSize);
     }
 
     return Result;
@@ -526,6 +532,11 @@ void NTFS_VolumeClose(ntfs_volume *Volume)
         CloseHandle(Volume->Handle);
     }
 
+    // TODO: Remove once volume will have better arena handling
+    if (Volume->CaseTable) {
+        NTFS__Win32MemoryFree(Volume->CaseTable);
+    }
+
     // Dont override the error
     *Volume = (ntfs_volume) { .Error = Volume->Error};
 }
@@ -608,8 +619,44 @@ void NTFS__VolumeLoadInformation(ntfs_volume *Volume)
         }
     }
 
+    // TODO: maybe change to sparse static table, instead of loading this for every volume
+    ntfs_file UpCase = NTFS_FileOpenFromIndex(Volume, NTFS_SystemFile_UpCase);
+    if (UpCase.Error) {
+        NTFS_RETURN(Volume->Error, NTFS_Error_VolumeFailedLoadCaseTable);
+    }
+
+    ntfs_attr *DataAttr = 0;
+    for (size_t Index = 0; Index < NTFS__ListLen(UpCase.AttrList); Index++) {
+        ntfs_attr *Attr = UpCase.AttrList + Index;
+        if (Attr->Type == NTFS_AttributeType_Data && !Attr->Name) {
+            DataAttr = Attr;
+            break;
+        }
+    }
+
+    if (!DataAttr || DataAttr->NonResident.AlignedSize != NTFS__ARENA_KILOBYTE(128)) {
+        NTFS_RETURN(Volume->Error, NTFS_Error_VolumeFailedLoadCaseTable);
+
+    } else if (NTFS__ListLen(DataAttr->NonResident.RunList) != 1) {
+        // TODO: Remove later when have support for reading files
+        NTFS_RETURN(Volume->Error, NTFS_Error_VolumeFailedLoadCaseTable);
+    }
+
+    uint64_t CaseOffset =
+        DataAttr->NonResident.RunList[0].StartVCN * Volume->BytesPerCluster;
+    Volume->CaseTable   =
+        NTFS__Win32MemoryAllocate(DataAttr->NonResident.AlignedSize, 0);
+
+    // TODO: Remove NTFS__Win32MemoryAllocate once volume have better arena handling
+    if (Volume->CaseTable == 0 ||
+        !NTFS_VolumeRead(Volume, CaseOffset, Volume->CaseTable,
+                         DataAttr->NonResident.AlignedSize)) {
+        NTFS_RETURN(Volume->Error, NTFS_Error_VolumeFailedLoadCaseTable);
+    }
+
 skip:
     NTFS_FileClose(&VolumeFile);
+    NTFS_FileClose(&UpCase);
 }
 
 ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
