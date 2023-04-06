@@ -238,11 +238,18 @@ typedef struct {
 
 typedef struct {
     ntfs_error Error;
-    ntfs_arena Arena;
 
-    bool       IsDir;
-    void      *Buffer;
+    uint8_t   *Buffer;
     ntfs_attr *AttrList;
+    bool      IsDir;
+} ntfs_record;
+
+typedef struct {
+    ntfs_error   Error;
+    ntfs_arena   Arena;
+    ntfs_volume *Volume;
+
+    ntfs_record Record;
 } ntfs_file;
 
 #define NTFS_FILE_RECORD_MAGIC           0x454C4946
@@ -251,6 +258,7 @@ typedef struct {
 NTFS_API ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index);
 NTFS_API void      NTFS_FileClose(ntfs_file *File);
 
+NTFS_API ntfs_record    NTFS__RecordLoadFromIndex(ntfs_volume *Volume, ntfs_arena *Arena, size_t Index);
 NTFS_API ntfs_data_run *NTFS__DataRunsLoad(ntfs_arena *Arena, void *Buffer, size_t Size);
 
 #endif   // NTFS_PARSER_H
@@ -603,8 +611,8 @@ void NTFS__VolumeLoadInformation(ntfs_volume *Volume)
         NTFS_RETURN(Volume->Error, NTFS_Error_VolumeFailedLoadInfoFile);
     }
 
-    for (size_t Index = 0; Index < NTFS__ListLen(VolumeFile.AttrList); Index++) {
-        ntfs_attr *Attr = VolumeFile.AttrList + Index;
+    for (size_t Index = 0; Index < NTFS__ListLen(VolumeFile.Record.AttrList); Index++) {
+        ntfs_attr *Attr = VolumeFile.Record.AttrList + Index;
 
         if (Attr->Type == NTFS_AttributeType_VolumeName) {
             NTFS_MEM_COPY(Volume->Name, sizeof(Volume->Name) - 2,
@@ -626,8 +634,8 @@ void NTFS__VolumeLoadInformation(ntfs_volume *Volume)
     }
 
     ntfs_attr *DataAttr = 0;
-    for (size_t Index = 0; Index < NTFS__ListLen(UpCase.AttrList); Index++) {
-        ntfs_attr *Attr = UpCase.AttrList + Index;
+    for (size_t Index = 0; Index < NTFS__ListLen(UpCase.Record.AttrList); Index++) {
+        ntfs_attr *Attr = UpCase.Record.AttrList + Index;
         if (Attr->Type == NTFS_AttributeType_Data && !Attr->Name) {
             DataAttr = Attr;
             break;
@@ -662,27 +670,38 @@ skip:
 ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
 {
     ntfs_file Result = {
-        .Arena = NTFS__ArenaDefault(),
+        .Arena  = NTFS__ArenaDefault(),
+        .Volume = Volume,
     };
 
     if (Result.Arena.Buffer == 0) {
         NTFS_RETURN(Result.Error, NTFS_Error_MemoryError);
     }
 
+    Result.Record = NTFS__RecordLoadFromIndex(Volume, &Result.Arena, Index);
+    Result.Error  = Result.Record.Error;
+
+skip:
+    return Result;
+}
+
+ntfs_record NTFS__RecordLoadFromIndex(ntfs_volume *Volume, ntfs_arena *Arena, size_t Index)
+{
+    ntfs_record Result = { 0 };
+
     uint64_t RecordOffset = Volume->MftCluster * Volume->BytesPerCluster
                             + (Index * Volume->BytesPerMftEntry);
-    uint8_t *FileRecord   = NTFS__ArenaAlloc(&Result.Arena, Volume->BytesPerMftEntry);
+    uint8_t *FileRecord   = NTFS__ArenaAlloc(Arena, Volume->BytesPerMftEntry);
     if (!NTFS_VolumeRead(Volume, RecordOffset, FileRecord, Volume->BytesPerMftEntry)) {
         NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedRead);
     }
-    Result.Buffer = FileRecord;
 
-    uint32_t Magic     = *NTFS_CAST(uint32_t *, &FileRecord[0x00]);
-    uint16_t Offset    = *NTFS_CAST(uint16_t *, &FileRecord[0x14]);
-    uint16_t Flags     = *NTFS_CAST(uint16_t *, &FileRecord[0x16]);
-    uint32_t RealSize  = *NTFS_CAST(uint32_t *, &FileRecord[0x18]);
-    uint32_t AllocSize = *NTFS_CAST(uint32_t *, &FileRecord[0x1C]);
-    uint32_t MftIndex  = *NTFS_CAST(uint32_t *, &FileRecord[0x2C]);
+    uint32_t Magic     = *NTFS_CAST(uint32_t *, FileRecord + 0x00);
+    uint16_t Offset    = *NTFS_CAST(uint16_t *, FileRecord + 0x14);
+    uint16_t Flags     = *NTFS_CAST(uint16_t *, FileRecord + 0x16);
+    uint32_t RealSize  = *NTFS_CAST(uint32_t *, FileRecord + 0x18);
+    uint32_t AllocSize = *NTFS_CAST(uint32_t *, FileRecord + 0x1C);
+    uint32_t MftIndex  = *NTFS_CAST(uint32_t *, FileRecord + 0x2C);
 
     bool IsValid = Magic == NTFS_FILE_RECORD_MAGIC;
     IsValid     &= Offset < RealSize;
@@ -702,18 +721,18 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
             break;
         }
 
-        uint32_t AttrTotalSize  = *NTFS_CAST(uint32_t *, &AttrPtr[0x04]);
-        uint32_t AttrNameOffset = *NTFS_CAST(uint16_t *, &AttrPtr[0x0A]);
+        uint32_t AttrTotalSize  = *NTFS_CAST(uint32_t *, AttrPtr + 0x04);
+        uint32_t AttrNameOffset = *NTFS_CAST(uint16_t *, AttrPtr + 0x0A);
         if (AttrPtr + AttrTotalSize > AttrEndPtr) {
             NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
         }
 
         ntfs_attr Attr  = { 0 };
-        Attr.Type       = *NTFS_CAST(uint32_t *, &AttrPtr[0x00]);
+        Attr.Type       = *NTFS_CAST(uint32_t *, AttrPtr + 0x00);
         Attr.NonResFlag = AttrPtr[0x08] == 1;
-        Attr.NameLength = *NTFS_CAST(uint8_t  *, &AttrPtr[0x09]);
-        Attr.Flags      = *NTFS_CAST(uint16_t *, &AttrPtr[0x0C]);
-        Attr.Id         = *NTFS_CAST(uint16_t *, &AttrPtr[0x0E]);
+        Attr.NameLength = *NTFS_CAST(uint8_t  *, AttrPtr + 0x09);
+        Attr.Flags      = *NTFS_CAST(uint16_t *, AttrPtr + 0x0C);
+        Attr.Id         = *NTFS_CAST(uint16_t *, AttrPtr + 0x0E);
         if (Attr.NameLength) {
             if (AttrNameOffset + Attr.NameLength >= AttrTotalSize) {
                 NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
@@ -723,9 +742,9 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
         }
 
         if (Attr.NonResFlag) {
-            uint16_t AttrOffset    = *NTFS_CAST(uint16_t *, &AttrPtr[0x20]);
-            uint64_t AttrAllocSize = *NTFS_CAST(uint64_t *, &AttrPtr[0x28]);
-            uint64_t AttrRealSize  = *NTFS_CAST(uint64_t *, &AttrPtr[0x30]);
+            uint16_t AttrOffset    = *NTFS_CAST(uint16_t *, AttrPtr + 0x20);
+            uint64_t AttrAllocSize = *NTFS_CAST(uint64_t *, AttrPtr + 0x28);
+            uint64_t AttrRealSize  = *NTFS_CAST(uint64_t *, AttrPtr + 0x30);
             if (AttrRealSize > AttrAllocSize ||
                 !NTFS__IsAligned(AttrAllocSize, Volume->BytesPerCluster)) {
                 NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
@@ -734,12 +753,12 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
             Attr.NonResident.Size        = AttrRealSize;
             Attr.NonResident.AlignedSize = AttrAllocSize;
             Attr.NonResident.RunList =
-                NTFS__DataRunsLoad(&Result.Arena, AttrPtr + AttrOffset,
+                NTFS__DataRunsLoad(Arena, AttrPtr + AttrOffset,
                                    AttrTotalSize - AttrOffset);
 
         } else {
-            uint32_t AttrSize   = *NTFS_CAST(uint32_t *, &AttrPtr[0x10]);
-            uint16_t AttrOffset = *NTFS_CAST(uint16_t *, &AttrPtr[0x14]);
+            uint32_t AttrSize   = *NTFS_CAST(uint32_t *, AttrPtr + 0x10);
+            uint16_t AttrOffset = *NTFS_CAST(uint16_t *, AttrPtr + 0x14);
             if (AttrOffset + AttrSize > AttrTotalSize) {
                 NTFS_RETURN(Result.Error, NTFS_Error_RecordFailedValidation);
             }
@@ -750,7 +769,7 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
             }
         }
 
-        NTFS__ListPush(&Result.Arena, Result.AttrList, Attr);
+        NTFS__ListPush(Arena, Result.AttrList, Attr);
         AttrPtr += AttrTotalSize;
     }
 

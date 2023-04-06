@@ -9,6 +9,7 @@ void PrintHexDump(void *Buffer, size_t Size);
 #define RETURN_SKIP(value)    NTFS_STATEMENT(Result = 1; goto skip;)
 #define BOOL_TO_STRING(value) ((char *[]){"false", "true"}[value])
 
+
 int main(void)
 {
     int Result = 0;
@@ -30,8 +31,8 @@ int main(void)
         RETURN_SKIP(1);
     }
 
-    for (size_t i = 0; i < NTFS__ListLen(File.AttrList); i++) {
-        ntfs_attr *Attr = &File.AttrList[i];
+    for (size_t i = 0; i < NTFS__ListLen(File.Record.AttrList); i++) {
+        ntfs_attr *Attr = File.Record.AttrList + i;
 
         printf("Attribute %02d\n", Attr->Id);
         printf("    Type:        0x%03x (%s)\n",
@@ -44,7 +45,7 @@ int main(void)
         }
 
         if (Attr->NonResFlag) {
-            printf("    Data Runs:\n");
+            printf("    Data Runs (%lld):\n", Attr->NonResident.Size);
             for (size_t j = 0; j < NTFS__ListLen(Attr->NonResident.RunList); j++) {
                 printf("        StartVCN: 0x%zx, Count: 0x%zx\n",
                        Attr->NonResident.RunList[j].StartVCN,
@@ -53,7 +54,7 @@ int main(void)
 
         } else {
             if (Attr->Resident.Data) {
-                printf("\nHexdump:\n");
+                printf("\nHexdump (%d):\n", Attr->Resident.Size);
                 PrintHexDump(Attr->Resident.Data, Attr->Resident.Size);
             }
         }
