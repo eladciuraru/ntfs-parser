@@ -58,6 +58,7 @@ typedef struct {
 NTFS_API ntfs_arena NTFS__ArenaDefault(void);
 NTFS_API void       NTFS__ArenaDestroy(ntfs_arena *Arena);
 NTFS_API void      *NTFS__ArenaAlloc(ntfs_arena *Arena, size_t Size);
+NTFS_API void      *NTFS__PushCopyWStringZ(ntfs_arena *Arena, uint16_t *String, size_t Length);
 NTFS_API void      *NTFS__ArenaResizeAlloc(ntfs_arena *Arena, void *Address, size_t Size);
 NTFS_API void       NTFS__ArenaReset(ntfs_arena *Arena);
 
@@ -432,6 +433,17 @@ void *NTFS__ArenaAlloc(ntfs_arena *Arena, size_t Size)
     NTFS_CAST(ntfs_arena_header *, Result)->Size = SizeAligned;
     Result += sizeof(ntfs_arena_header);
 
+    return Result;
+}
+
+void *NTFS__PushCopyWStringZ(ntfs_arena *Arena, uint16_t *String, size_t Length)
+{
+    size_t SrcSize  = Length * sizeof(String[0]);
+    size_t DestSize = SrcSize + sizeof(String[0]);
+    void  *Result = NTFS__ArenaAlloc(Arena, DestSize);
+
+    NTFS_MEM_COPY(Result, DestSize, String, SrcSize);
+    NTFS_CAST(uint16_t *, Result)[Length] = 0x00;
     return Result;
 }
 
