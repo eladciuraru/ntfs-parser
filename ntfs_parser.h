@@ -98,6 +98,8 @@ typedef enum {
     NTFS_Error_RecordFailedRead,
     NTFS_Error_RecordFailedValidation,
     NTFS_Error_FileFailedInfoValidation,
+    NTFS_Error_FileReadDataAttrNotFound,
+    NTFS_Error_FileReadFailed,
 } ntfs_error;
 
 static inline char *NTFS_ErrorToString(ntfs_error Error)
@@ -116,6 +118,8 @@ static inline char *NTFS_ErrorToString(ntfs_error Error)
     case NTFS_Error_RecordFailedRead:          return "ntfs failed reading mft file record";
     case NTFS_Error_RecordFailedValidation:    return "ntfs failed file record validation";
     case NTFS_Error_FileFailedInfoValidation:  return "ntfs failed file validation extra info";
+    case NTFS_Error_FileReadDataAttrNotFound:  return "ntfs failed file unnamed data attribute was not found";
+    case NTFS_Error_FileReadFailed:            return "ntfs failed file read";
     }
 
     return "";
@@ -307,6 +311,8 @@ typedef struct {
 
 NTFS_API ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index);
 NTFS_API void      NTFS_FileClose(ntfs_file *File);
+NTFS_API size_t    NTFS_FileRead(ntfs_file *File, uint64_t Offset,
+                                 uint8_t *Buffer, size_t Size);
 
 NTFS_API ntfs_record    NTFS__RecordLoadFromIndex(ntfs_volume *Volume,
                                                   ntfs_arena *Arena,
@@ -947,6 +953,71 @@ void NTFS_FileClose(ntfs_file *File)
     }
 
     *File = (ntfs_file) { .Error = File->Error };
+}
+
+size_t NTFS_FileRead(ntfs_file *File, uint64_t Offset, uint8_t *Buffer, size_t Size)
+{
+    // TODO: Add support for unaligned params
+    NTFS_ASSERT(NTFS__IsAligned(Offset, File->Volume->BytesPerCluster),
+                "Offset must be aligned to cluster size");
+    NTFS_ASSERT(NTFS__IsAligned(Size, File->Volume->BytesPerCluster),
+                "Size must be aligned to cluster size");
+
+    size_t Result = 0;
+
+    ntfs_attr *DataAttr = 0;
+    for (size_t Index = 0; Index < NTFS__ListLen(File->Record.AttrList); Index++) {
+        ntfs_attr *Attr = File->Record.AttrList + Index;
+
+        if (Attr->Type == NTFS_AttributeType_Data && !Attr->Name) {
+            DataAttr = Attr;
+            break;
+        }
+    }
+
+    if (DataAttr == 0) {
+        NTFS_RETURN(File->Error, NTFS_Error_FileReadDataAttrNotFound);
+    }
+
+    if (!DataAttr->NonResFlag) {
+        size_t SrcSize =
+            (DataAttr->Resident.Size > Size) ? Size : DataAttr->Resident.Size;
+        NTFS_MEM_COPY(Buffer, Size, DataAttr->Resident.Data, SrcSize);
+        NTFS_RETURN(Result, SrcSize);
+    }
+
+    uint64_t FileOffset   = 0;
+    uint64_t BufferOffset = 0;
+    for (size_t Index = 0; Index < NTFS__ListLen(DataAttr->NonResident.RunList) && Size; Index++) {
+        ntfs_data_run *Run = DataAttr->NonResident.RunList + Index;
+
+        size_t   ReadSize   = Run->Count * File->Volume->BytesPerCluster;
+        uint64_t ReadOffset = Run->StartVCN * File->Volume->BytesPerCluster;
+
+        if (Offset <= FileOffset + ReadSize) {
+            if (Size < ReadSize) {
+                ReadSize = Size;
+            }
+
+            if (FileOffset < Offset) {
+                ReadOffset += Offset - FileOffset;
+            }
+
+            if (!NTFS_VolumeRead(File->Volume, ReadOffset, Buffer + BufferOffset, ReadSize)) {
+                NTFS_RETURN(File->Error, NTFS_Error_FileReadFailed);
+            }
+
+            Offset += ReadSize;
+            BufferOffset += ReadSize;
+            Result += ReadSize;
+            Size -= ReadSize;
+        }
+
+        FileOffset += ReadSize;
+    }
+
+skip:
+    return Result;
 }
 
 #endif  // NTFS_PARSER_IMPLEMENTATION
