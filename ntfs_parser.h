@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 // Helper macros
 #define NTFS_STATEMENT(statement) \
@@ -280,7 +281,7 @@ typedef struct {
             uint32_t ReadOnly          : 1;
             uint32_t Hidden            : 1;
             uint32_t System            : 1;
-            uint32_t _                 : 1;
+            uint32_t _                 : 2;
             uint32_t Archive           : 1;
             uint32_t Device            : 1;
             uint32_t Normal            : 1;
@@ -307,8 +308,11 @@ typedef struct {
 NTFS_API ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index);
 NTFS_API void      NTFS_FileClose(ntfs_file *File);
 
-NTFS_API ntfs_record    NTFS__RecordLoadFromIndex(ntfs_volume *Volume, ntfs_arena *Arena, size_t Index);
-NTFS_API ntfs_data_run *NTFS__DataRunsLoad(ntfs_arena *Arena, void *Buffer, size_t Size);
+NTFS_API ntfs_record    NTFS__RecordLoadFromIndex(ntfs_volume *Volume,
+                                                  ntfs_arena *Arena,
+                                                  size_t Index);
+NTFS_API ntfs_data_run *NTFS__DataRunsLoad(ntfs_arena *Arena,
+                                           void *Buffer, size_t Size);
 
 #endif   // NTFS_PARSER_H
 
@@ -748,10 +752,6 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
     for (size_t i = 0; i < NTFS__ListLen(Result.Record.AttrList); i++) {
         ntfs_attr *Attr = Result.Record.AttrList + i;
 
-        if (Attr->NonResFlag) {
-            continue;
-        }
-
         if (Attr->Type == NTFS_AttributeType_StandardInformation) {
             HasStdInfo = true;
 
@@ -774,8 +774,8 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
 
             Result.ParentIndex =
                 *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x00) & ~(INT64_MIN >> 16);
-            Result.AlignedSize = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x28);
-            Result.Size        = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x30);
+            // Result.AlignedSize = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x28);
+            // Result.Size        = *NTFS_CAST(uint64_t *, Attr->Resident.Data + 0x30);
 
             if (Result.Size > Result.AlignedSize ||
                 !NTFS__IsAligned(Result.AlignedSize, Volume->BytesPerCluster)) {
@@ -783,8 +783,8 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
             }
 
             uint8_t NameLength = Attr->Resident.Data[0x40];
-            uint8_t NameSpace  = Attr->Resident.Data[0x41];
-            if (NameLength > (Attr->Resident.Size - 0x42) || NameSpace != 0x03) {
+            // uint8_t NameSpace  = Attr->Resident.Data[0x41];
+            if (NameLength > (Attr->Resident.Size - 0x42)) {
                 NTFS_RETURN(Result.Error, NTFS_Error_FileFailedInfoValidation);
             }
 
@@ -792,6 +792,15 @@ ntfs_file NTFS_FileOpenFromIndex(ntfs_volume *Volume, size_t Index)
                 NTFS__PushCopyWStringZ(&Result.Arena,
                                        NTFS_CAST(uint16_t *, Attr->Resident.Data + 0x42),
                                        NameLength);
+
+        } else if (Attr->Type == NTFS_AttributeType_Data && !Attr->Name) {
+            if (Attr->NonResFlag) {
+                Result.Size        = Attr->NonResident.Size;
+                Result.AlignedSize = Attr->NonResident.AlignedSize;
+            } else {
+                Result.Size        = Attr->Resident.Size;
+                Result.AlignedSize = NTFS__Align(Result.Size, Volume->BytesPerCluster);
+            }
         }
     }
 
