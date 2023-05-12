@@ -146,7 +146,7 @@ typedef struct {
 #define NTFS_BOOT_RECORD_PARTITION_OFFSET    0x01BE
 #define NTFS_BOOT_RECORD_PARITION_ENTRY_SIZE 0x10
 
-NTFS_API ntfs_volume NTFS_VolumeOpen(char DriveLetter);
+NTFS_API ntfs_volume NTFS_VolumeOpen(wchar_t DriveLetter);
 NTFS_API ntfs_volume NTFS_VolumeOpenFromFile(wchar_t *Path);
 NTFS_API void        NTFS_VolumeClose(ntfs_volume *Volume);
 NTFS_API bool        NTFS_VolumeRead(ntfs_volume *Volume, uint64_t From,
@@ -551,12 +551,12 @@ void *NTFS__ListGrow(ntfs_arena *Arena, void *List, size_t ItemSize)
 
 
 // Volume API
-ntfs_volume NTFS_VolumeOpen(char DriveLetter)
+ntfs_volume NTFS_VolumeOpen(wchar_t DriveLetter)
 {
     ntfs_volume Result = { 0 };
 
     wchar_t DrivePath[] = L"\\\\.\\ :";
-    DrivePath[4]        = NTFS_CAST(wchar_t, DriveLetter);
+    DrivePath[4]        = DriveLetter;
     void *VolumeHandle  = NTFS__Win32FileOpen(DrivePath);
     if (VolumeHandle == 0) {
         NTFS_RETURN(Result.Error, NTFS_Error_VolumeOpen);

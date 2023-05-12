@@ -15,5 +15,6 @@ if not exist "%BinDir%" mkdir "%BinDir%"
 pushd %BinDir%
 
 clang %CompilerFlags% -O0 -g "%SourceDir%ntfs_example.c" -o "ntfs_example.exe" %LinkerFlags%
+clang %CompilerFlags% -O0 -g "%SourceDir%dump_attrdef.c" -o "dump_attrdef.exe" %LinkerFlags%
 
 popd
