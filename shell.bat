@@ -7,7 +7,7 @@ setlocal EnableDelayedExpansion
 set "ProjectDir=%~dp0"
 set "PATH=%ProjectDir%scripts;%ProjectDir%bin;%PATH%"
 
-set "_VsWhereExe=%ProjectDir%\vendors\microsoft\vswhere.exe"
+set "_VsWhereExe=%ProjectDir%vendors\microsoft\vswhere.exe"
 set "_FindToolsCmd=%_VsWhereExe% -nologo -latest -legacy -property installationPath"
 
 for /f "usebackq delims=" %%i in (`%_FindToolsCmd%`) do (

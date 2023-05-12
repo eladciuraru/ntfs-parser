@@ -3,66 +3,110 @@
 
 #include <stdio.h>
 #include <windows.h>
+#include <wchar.h>
 
+void DumpFileRecord(ntfs_file *File);
 void PrintHexDump(void *Buffer, size_t Size);
 void PrintFileTime(uint64_t FileTime);
 
-#define RETURN_SKIP(value)    NTFS_STATEMENT(Result = 1; goto skip;)
-#define BOOL_TO_STRING(value) ((char *[]){"false", "true"}[value])
 
-
-int main(void)
+int wmain(int Argc, wchar_t **Argv)
 {
-    int Result = 0;
+    int         Result = 0;
+    ntfs_volume Volume = { 0 };
+    ntfs_file   File   = { 0 };
 
-    // ntfs_volume Volume = NTFS_VolumeOpen('C');
-    ntfs_volume Volume = NTFS_VolumeOpenFromFile(L"ntfs_volume.vhd");
+    if (Argc != 3) {
+        printf("Usage: %ls ntfs_volume mft_index\n", Argv[0]);
+        printf("    ntfs_volume - path to ntfs volume (VHD or Volume letter)\n");
+        printf("    mft_index   - index to MFT record to dump\n");
+        NTFS_RETURN(Result, 1);
+    }
+
+    wchar_t *VolumePath  = Argv[1];
+    wchar_t *MftIndexEnd = 0;
+    uint64_t MftIndex    = wcstoull(Argv[2], &MftIndexEnd, 10);
+    if (MftIndexEnd == Argv[2]) {
+        printf("error: mft_index is not a number\n");
+        NTFS_RETURN(Result, 1);
+    }
+
+    Volume = NTFS_VolumeOpenFromFile(L"ntfs_volume.vhd");
+    if (wcslen(VolumePath) == 1) {
+        Volume = NTFS_VolumeOpen(VolumePath[0]);
+    } else {
+        Volume = NTFS_VolumeOpenFromFile(VolumePath);
+    }
     if (Volume.Error) {
-        printf("error: %s\n", NTFS_ErrorToString(Volume.Error));
-        RETURN_SKIP(1);
+        printf("error: Failed to load volume - %s\n", NTFS_ErrorToString(Volume.Error));
+        NTFS_RETURN(Result, 1);
     }
 
-    printf("MTF cluster number: 0x%zx\n", Volume.MftCluster);
-    printf("MTF cluster Offset: 0x%zx\n", Volume.MftCluster * Volume.BytesPerCluster);
-    printf("\n\n");
-
-    ntfs_file File = NTFS_FileOpenFromIndex(&Volume, NTFS_SystemFile_UpCase);
+    File = NTFS_FileOpenFromIndex(&Volume, NTFS_SystemFile_Mft);
     if (File.Error) {
-        printf("error: %s\n", NTFS_ErrorToString(File.Error));
-        RETURN_SKIP(1);
+        printf("error: Failed to load MFT record - %s\n", NTFS_ErrorToString(File.Error));
+        NTFS_RETURN(Result, 1);
     }
 
+    uint64_t MaxMftIndex = (File.Size / Volume.BytesPerMftEntry) - 1;
+    if (MftIndex > MaxMftIndex) {
+        printf("Clamping MftIndex to max possible index %llu\n", MaxMftIndex);
+        MftIndex = MaxMftIndex;
+    }
+
+    // No need to reopen MftRecord
+    if (MftIndex != 0) {
+        NTFS_FileClose(&File);
+        File = NTFS_FileOpenFromIndex(&Volume, MftIndex);
+        if (File.Error) {
+            printf("error: failed to open file - %s\n", NTFS_ErrorToString(File.Error));
+            NTFS_RETURN(Result, 1);
+        }
+    }
+
+    DumpFileRecord(&File);
+
+skip:
+    NTFS_FileClose(&File);
+    NTFS_VolumeClose(&Volume);
+
+    return Result;
+}
+
+void DumpFileRecord(ntfs_file *File)
+{
     printf("File information:\n");
-    printf("    Name:         %ls\n", File.Name);
-    printf("    Size:         %lld\n", File.Size);
-    printf("    Flags:        0x%04x\n", File.Flags.Value);
+    printf("    Name:         %ls\n", File->Name);
+    printf("    Size:         %lld\n", File->Size);
+    printf("    AlignedSize:  %lld\n", File->AlignedSize);
+    printf("    Flags:        0x%04x\n", File->Flags.Value);
 
     printf("    CreationTime: ");
-    PrintFileTime(File.CreationTime);
+    PrintFileTime(File->CreationTime);
     printf("\n");
 
     printf("    ModifiedTime: ");
-    PrintFileTime(File.ModifiedTime);
+    PrintFileTime(File->ModifiedTime);
     printf("\n");
 
     printf("    ChangedTime:  ");
-    PrintFileTime(File.ChangedTime);
+    PrintFileTime(File->ChangedTime);
     printf("\n");
 
     printf("    ReadTime:     ");
-    PrintFileTime(File.ReadTime);
+    PrintFileTime(File->ReadTime);
     printf("\n");
 
-    printf("    Parent Index: %lld\n", File.ParentIndex);
+    printf("    Parent Index: %lld\n", File->ParentIndex);
     printf("\n\n");
 
-    for (size_t i = 0; i < NTFS__ListLen(File.Record.AttrList); i++) {
-        ntfs_attr *Attr = File.Record.AttrList + i;
+    for (size_t i = 0; i < NTFS__ListLen(File->Record.AttrList); i++) {
+        ntfs_attr *Attr = File->Record.AttrList + i;
 
         printf("Attribute %02d\n", Attr->Id);
         printf("    Type:        0x%03x (%s)\n",
                Attr->Type, NTFS_AttrTypeToString(Attr->Type));
-        printf("    NonResident: %s\n", BOOL_TO_STRING(Attr->NonResFlag));
+        printf("    NonResident: %s\n", (Attr->NonResFlag) ? "true" : "false");
         printf("    Flags:       0x%x\n", Attr->Flags);
 
         if (Attr->Name) {
@@ -86,12 +130,6 @@ int main(void)
 
         printf("\n\n");
     }
-
-skip:
-    NTFS_FileClose(&File);
-    NTFS_VolumeClose(&Volume);
-
-    return Result;
 }
 
 void PrintHexDump(void *Buffer, size_t Size)
