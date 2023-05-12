@@ -136,6 +136,7 @@ typedef struct {
     uint64_t BytesPerSector;
     uint64_t BytesPerCluster;
     uint64_t BytesPerMftEntry;
+    uint64_t SerialNumber;
 
     uint16_t  Name[128];
     uint16_t *CaseTable;
@@ -653,6 +654,7 @@ ntfs_volume NTFS__VolumeLoad(void *VolumeHandle, size_t VbrOffset)
     Result.SectorsPerCluster = *NTFS_CAST(uint8_t  *, &BootSector[0x0D]);
     Result.MftCluster        = *NTFS_CAST(uint64_t *, &BootSector[0x30]);
     Result.BytesPerCluster   = Result.BytesPerSector * Result.SectorsPerCluster;
+    Result.SerialNumber      = *NTFS_CAST(uint64_t *, BootSector + 0x48);
 
     int8_t ClustersPerFileRecord = *NTFS_CAST(int8_t *, &BootSector[0x40]);
     if (ClustersPerFileRecord < 0) {
